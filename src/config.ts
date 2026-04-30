@@ -23,12 +23,19 @@ const envSchema = z.object({
   GEMINI_EXTENSIONS: z.string().optional(),
   GEMINI_INCLUDE_DIRECTORIES: z.string().optional(),
   GEMINI_SETTINGS: z.string().trim().optional(),
+  GEMINI_MAX_WORKERS: z.coerce.number().int().positive().default(3),
+  GEMINI_MAX_CHAT_WORKERS: z.coerce.number().int().positive().default(3),
+  GEMINI_MAX_QUEUED_TASKS: z.coerce.number().int().positive().default(50),
+  GEMINI_MAX_CHAT_QUEUED_TASKS: z.coerce.number().int().positive().default(10),
+  GEMINI_TASK_HISTORY_LIMIT: z.coerce.number().int().positive().default(20),
+  GEMINI_WORKER_SESSION_MODE: z.enum(["isolated", "chat"]).default("isolated"),
   SESSION_STORE_PATH: z.string().trim().min(1).default(".data/sessions.json"),
   TELEGRAM_RESPONSE_CHUNK_SIZE: z.coerce.number().int().min(500).max(4096).default(3900),
   ASSISTANT_SYSTEM_INSTRUCTION: z.string().trim().optional()
 });
 
 export type GeminiOutputFormat = "json" | "stream-json";
+export type GeminiWorkerSessionMode = "isolated" | "chat";
 
 export interface AppConfig {
   telegramBotToken: string;
@@ -47,6 +54,12 @@ export interface AppConfig {
   geminiExtensions: string[];
   geminiIncludeDirectories: string[];
   geminiSettings?: string;
+  geminiMaxWorkers: number;
+  geminiMaxChatWorkers: number;
+  geminiMaxQueuedTasks: number;
+  geminiMaxChatQueuedTasks: number;
+  geminiTaskHistoryLimit: number;
+  geminiWorkerSessionMode: GeminiWorkerSessionMode;
   sessionStorePath: string;
   telegramResponseChunkSize: number;
   assistantSystemInstruction: string;
@@ -130,6 +143,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     geminiExtensions: parseCommaSeparatedList(data.GEMINI_EXTENSIONS),
     geminiIncludeDirectories: parseCommaSeparatedList(data.GEMINI_INCLUDE_DIRECTORIES),
     geminiSettings: data.GEMINI_SETTINGS || undefined,
+    geminiMaxWorkers: data.GEMINI_MAX_WORKERS,
+    geminiMaxChatWorkers: data.GEMINI_MAX_CHAT_WORKERS,
+    geminiMaxQueuedTasks: data.GEMINI_MAX_QUEUED_TASKS,
+    geminiMaxChatQueuedTasks: data.GEMINI_MAX_CHAT_QUEUED_TASKS,
+    geminiTaskHistoryLimit: data.GEMINI_TASK_HISTORY_LIMIT,
+    geminiWorkerSessionMode: data.GEMINI_WORKER_SESSION_MODE,
     sessionStorePath: data.SESSION_STORE_PATH,
     telegramResponseChunkSize: data.TELEGRAM_RESPONSE_CHUNK_SIZE,
     assistantSystemInstruction: data.ASSISTANT_SYSTEM_INSTRUCTION || DEFAULT_SYSTEM_INSTRUCTION

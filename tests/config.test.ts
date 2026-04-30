@@ -32,6 +32,12 @@ describe("config", () => {
     expect(config.geminiExtensions).toEqual([]);
     expect(config.geminiIncludeDirectories).toEqual([]);
     expect(config.geminiSettings).toBeUndefined();
+    expect(config.geminiMaxWorkers).toBe(3);
+    expect(config.geminiMaxChatWorkers).toBe(3);
+    expect(config.geminiMaxQueuedTasks).toBe(50);
+    expect(config.geminiMaxChatQueuedTasks).toBe(10);
+    expect(config.geminiTaskHistoryLimit).toBe(20);
+    expect(config.geminiWorkerSessionMode).toBe("isolated");
   });
 
   it.each(["true", "1", "yes", "on", " TRUE "])("parses %s as true", (value) => {
@@ -75,7 +81,13 @@ describe("config", () => {
       GEMINI_ALLOWED_MCP_SERVER_NAMES: "github, filesystem",
       GEMINI_EXTENSIONS: "ext-a, ext-b",
       GEMINI_INCLUDE_DIRECTORIES: "src, tests",
-      GEMINI_SETTINGS: " settings.json "
+      GEMINI_SETTINGS: " settings.json ",
+      GEMINI_MAX_WORKERS: "5",
+      GEMINI_MAX_CHAT_WORKERS: "2",
+      GEMINI_MAX_QUEUED_TASKS: "25",
+      GEMINI_MAX_CHAT_QUEUED_TASKS: "7",
+      GEMINI_TASK_HISTORY_LIMIT: "50",
+      GEMINI_WORKER_SESSION_MODE: "chat"
     });
 
     expect(config.geminiYolo).toBe(true);
@@ -88,5 +100,11 @@ describe("config", () => {
     expect(config.geminiExtensions).toEqual(["ext-a", "ext-b"]);
     expect(config.geminiIncludeDirectories).toEqual(["src", "tests"]);
     expect(config.geminiSettings).toBe("settings.json");
+    expect(config.geminiMaxWorkers).toBe(5);
+    expect(config.geminiMaxChatWorkers).toBe(2);
+    expect(config.geminiMaxQueuedTasks).toBe(25);
+    expect(config.geminiMaxChatQueuedTasks).toBe(7);
+    expect(config.geminiTaskHistoryLimit).toBe(50);
+    expect(config.geminiWorkerSessionMode).toBe("chat");
   });
 });

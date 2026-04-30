@@ -24,7 +24,14 @@ export function createTelegramBot(config: AppConfig, assistant: AssistantService
     allowedMcpServerNames: config.geminiAllowedMcpServerNames,
     extensions: config.geminiExtensions,
     includeDirectories: config.geminiIncludeDirectories,
-    settingsConfigured: config.geminiSettings !== undefined
+    settingsConfigured: config.geminiSettings !== undefined,
+    maxWorkers: config.geminiMaxWorkers,
+    maxChatWorkers: config.geminiWorkerSessionMode === "chat" ? 1 : config.geminiMaxChatWorkers,
+    maxQueuedTasks: config.geminiMaxQueuedTasks,
+    maxChatQueuedTasks: config.geminiMaxChatQueuedTasks,
+    taskHistoryLimit: config.geminiTaskHistoryLimit,
+    workerSessionMode: config.geminiWorkerSessionMode,
+    responseChunkSize: config.telegramResponseChunkSize
   });
 
   bot.on(

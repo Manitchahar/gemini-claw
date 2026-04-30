@@ -1,27 +1,62 @@
 import type { GeminiClient } from "../gemini/GeminiClient.js";
 import { createSessionRecord } from "../storage/SessionStore.js";
 import type { SessionRecord, SessionStore } from "../storage/SessionStore.js";
+import { ChatOperationQueue } from "./chatQueue.js";
+import type { ChatOperationRunner } from "./chatQueue.js";
 import { buildAssistantPrompt } from "./prompts.js";
-import type { AssistantOptions, AssistantRequest } from "./types.js";
+import type { AssistantTaskManager } from "./taskManager.js";
+import type {
+  AssistantOptions,
+  AssistantRequest,
+  AssistantTaskCallbacks,
+  AssistantTaskRequest,
+  AssistantTaskSummary,
+  SubagentStatus,
+  WorkerStats
+} from "./types.js";
 
 export class AssistantService {
-  private readonly chatQueues = new Map<string, Promise<void>>();
-
   constructor(
     private readonly geminiClient: GeminiClient,
     private readonly sessionStore: SessionStore,
-    private readonly options: AssistantOptions
+    private readonly options: AssistantOptions,
+    private readonly taskManager?: AssistantTaskManager,
+    private readonly chatQueue: ChatOperationRunner = new ChatOperationQueue()
   ) {}
 
   async respondToText(request: AssistantRequest): Promise<string> {
-    return this.runForChat(request.chatId, async () => this.respondToTextUnlocked(request));
+    return this.chatQueue.run(request.chatId, async () => this.respondToTextUnlocked(request));
   }
 
   async resetChat(chatId: string): Promise<void> {
-    await this.runForChat(chatId, async () => {
+    await this.chatQueue.run(chatId, async () => {
       await this.geminiClient.resetSession?.(chatId);
       await this.sessionStore.deleteSession(chatId);
     });
+  }
+
+  startTask(request: AssistantTaskRequest, callbacks?: AssistantTaskCallbacks): AssistantTaskSummary {
+    return this.requireTaskManager().startTask(request, callbacks);
+  }
+
+  listTasks(chatId: string): AssistantTaskSummary[] {
+    return this.requireTaskManager().listTasks(chatId);
+  }
+
+  getTask(chatId: string, taskId: string): AssistantTaskSummary | undefined {
+    return this.requireTaskManager().getTask(chatId, taskId);
+  }
+
+  cancelTask(chatId: string, taskId: string): AssistantTaskSummary | undefined {
+    return this.requireTaskManager().cancelTask(chatId, taskId);
+  }
+
+  getWorkerStats(): WorkerStats {
+    return this.requireTaskManager().getWorkerStats();
+  }
+
+  getSubagentStatus(chatId?: string): SubagentStatus {
+    return this.requireTaskManager().getSubagentStatus(chatId);
   }
 
   private async respondToTextUnlocked(request: AssistantRequest): Promise<string> {
@@ -84,24 +119,11 @@ export class AssistantService {
     return created;
   }
 
-  private async runForChat<T>(chatId: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.chatQueues.get(chatId) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const queued = previous.catch(() => undefined).then(() => current);
-
-    this.chatQueues.set(chatId, queued);
-    await previous.catch(() => undefined);
-
-    try {
-      return await operation();
-    } finally {
-      release();
-      if (this.chatQueues.get(chatId) === queued) {
-        this.chatQueues.delete(chatId);
-      }
+  private requireTaskManager(): AssistantTaskManager {
+    if (!this.taskManager) {
+      throw new Error("Task manager is not configured.");
     }
+
+    return this.taskManager;
   }
 }

@@ -43,7 +43,8 @@ export class CliGeminiClient implements GeminiClient {
     const output = await runGeminiCli(input, {
       ...this.options,
       model: context.model ?? this.options.model,
-      sessionId: context.sessionId
+      sessionId: context.sessionId,
+      signal: context.signal
     });
 
     const events =
@@ -59,6 +60,7 @@ export class CliGeminiClient implements GeminiClient {
 
 interface RunGeminiCliOptions extends CliGeminiClientOptions {
   sessionId?: string;
+  signal?: AbortSignal;
 }
 
 interface CommandOutput {
@@ -115,6 +117,11 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
   const args = buildGeminiCliArgs(prompt, options);
 
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted) {
+      reject(new GeminiCliError("Gemini CLI run was cancelled"));
+      return;
+    }
+
     const child = spawn(options.command, args, {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -125,6 +132,7 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
     let stderr = "";
     let settled = false;
     let timedOut = false;
+    let cancelled = false;
     let killTimer: NodeJS.Timeout | undefined;
 
     const finish = (callback: () => void): void => {
@@ -132,11 +140,25 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      options.signal?.removeEventListener("abort", abort);
       callback();
+    };
+
+    const abort = (): void => {
+      cancelled = true;
+      if (killTimer) clearTimeout(killTimer);
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(() => {
+          reject(new GeminiCliError("Gemini CLI run was cancelled", { stderr }));
+        });
+      }, 5_000);
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
+      if (killTimer) clearTimeout(killTimer);
       child.kill("SIGTERM");
       killTimer = setTimeout(() => {
         child.kill("SIGKILL");
@@ -145,6 +167,8 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
         });
       }, 5_000);
     }, options.timeoutMs);
+
+    options.signal?.addEventListener("abort", abort, { once: true });
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -167,6 +191,11 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
       finish(() => {
         if (timedOut) {
           reject(new GeminiCliError(`Gemini CLI timed out after ${options.timeoutMs}ms`, { exitCode: code, stderr }));
+          return;
+        }
+
+        if (cancelled) {
+          reject(new GeminiCliError("Gemini CLI run was cancelled", { exitCode: code, stderr }));
           return;
         }
 
@@ -341,12 +370,22 @@ function normalizeStreamStatsEvent(event: Record<string, unknown>): AssistantEve
 
 function normalizeStreamToolUseEvent(event: Record<string, unknown>): AssistantEvent | undefined {
   const toolName = extractToolName(event);
-  return toolName ? { type: "tool_start", name: toolName } : undefined;
+  return toolName
+    ? { type: "tool_start", name: toolName, raw: event, possibleSubagentName: extractPossibleSubagentName(event) }
+    : undefined;
 }
 
 function normalizeStreamToolResultEvent(event: Record<string, unknown>): AssistantEvent | undefined {
   const toolName = extractToolName(event);
-  return toolName ? { type: "tool_end", name: toolName, success: !extractErrorMessage(event) } : undefined;
+  return toolName
+    ? {
+        type: "tool_end",
+        name: toolName,
+        success: !extractErrorMessage(event),
+        raw: event,
+        possibleSubagentName: extractPossibleSubagentName(event)
+      }
+    : undefined;
 }
 
 function throwIfStructuredError(value: unknown): void {
@@ -465,6 +504,24 @@ function extractSessionId(value: unknown): string | undefined {
 
 function extractToolName(value: unknown): string | undefined {
   return extractStringProperty(value, ["name", "toolName", "tool_name"]);
+}
+
+function extractPossibleSubagentName(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const explicit = extractStringProperty(value, ["subagent", "subAgent", "sub_agent", "agent", "agentName", "agent_name"]);
+  if (explicit) {
+    return explicit;
+  }
+
+  const toolName = extractToolName(value);
+  if (toolName && /(?:^|[_\-\s])(?:subagent|sub-agent|agent)(?:$|[_\-\s])/i.test(toolName)) {
+    return toolName;
+  }
+
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

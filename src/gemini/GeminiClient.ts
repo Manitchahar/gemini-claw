@@ -5,6 +5,7 @@ export interface GeminiClientContext {
   userId: string;
   sessionId?: string;
   model?: string;
+  signal?: AbortSignal;
 }
 
 export interface GeminiClient {

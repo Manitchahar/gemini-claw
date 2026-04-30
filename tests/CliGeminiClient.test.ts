@@ -134,20 +134,24 @@ describe("CliGeminiClient parsers", () => {
   });
 
   it("normalizes stream-json tool_use events into tool_start", () => {
-    expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "tool_use", toolName: "ReadFile" }))).toEqual([
-      { type: "tool_start", name: "ReadFile" }
-    ]);
+    const raw = { type: "tool_use", toolName: "ReadFile" };
+    expect(parseGeminiStreamJsonOutput(JSON.stringify(raw))).toEqual([{ type: "tool_start", name: "ReadFile", raw }]);
   });
 
   it("normalizes successful stream-json tool_result events into tool_end", () => {
-    expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "tool_result", tool_name: "ReadFile", result: "ok" }))).toEqual([
-      { type: "tool_end", name: "ReadFile", success: true }
-    ]);
+    const raw = { type: "tool_result", tool_name: "ReadFile", result: "ok" };
+    expect(parseGeminiStreamJsonOutput(JSON.stringify(raw))).toEqual([{ type: "tool_end", name: "ReadFile", success: true, raw }]);
   });
 
   it("normalizes failing stream-json tool_result events without throwing", () => {
-    expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "tool_result", name: "ReadFile", error: { message: "missing" } }))).toEqual([
-      { type: "tool_end", name: "ReadFile", success: false }
+    const raw = { type: "tool_result", name: "ReadFile", error: { message: "missing" } };
+    expect(parseGeminiStreamJsonOutput(JSON.stringify(raw))).toEqual([{ type: "tool_end", name: "ReadFile", success: false, raw }]);
+  });
+
+  it("records possible subagent names from stream-json tool events", () => {
+    const raw = { type: "tool_use", toolName: "RunSubAgent", agentName: "research-agent" };
+    expect(parseGeminiStreamJsonOutput(JSON.stringify(raw))).toEqual([
+      { type: "tool_start", name: "RunSubAgent", raw, possibleSubagentName: "research-agent" }
     ]);
   });
 

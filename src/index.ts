@@ -1,6 +1,8 @@
 import "dotenv/config";
 
 import { AssistantService } from "./assistant/assistantService.js";
+import { ChatOperationQueue } from "./assistant/chatQueue.js";
+import { AssistantTaskManager } from "./assistant/taskManager.js";
 import { createTelegramBot } from "./bot/telegramBot.js";
 import { loadConfig } from "./config.js";
 import { CliGeminiClient } from "./gemini/CliGeminiClient.js";
@@ -25,9 +27,27 @@ async function main(): Promise<void> {
     settings: config.geminiSettings
   });
   const sessionStore = new JsonSessionStore(config.sessionStorePath);
-  const assistant = new AssistantService(geminiClient, sessionStore, {
-    systemInstruction: config.assistantSystemInstruction
+  const chatQueue = new ChatOperationQueue();
+  const taskManager = new AssistantTaskManager(geminiClient, sessionStore, {
+    systemInstruction: config.assistantSystemInstruction,
+    maxWorkers: config.geminiMaxWorkers,
+    maxChatWorkers: config.geminiMaxChatWorkers,
+    maxQueuedTasks: config.geminiMaxQueuedTasks,
+    maxChatQueuedTasks: config.geminiMaxChatQueuedTasks,
+    historyLimit: config.geminiTaskHistoryLimit,
+    workerSessionMode: config.geminiWorkerSessionMode,
+    extensions: config.geminiExtensions,
+    sharedChatQueue: chatQueue
   });
+  const assistant = new AssistantService(
+    geminiClient,
+    sessionStore,
+    {
+      systemInstruction: config.assistantSystemInstruction
+    },
+    taskManager,
+    chatQueue
+  );
   const bot = createTelegramBot(config, assistant);
 
   await bot.start({
