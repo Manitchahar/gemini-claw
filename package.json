@@ -1,9 +1,9 @@
 {
-  "name": "telegram-gemini-assistant",
+  "name": "gemini-claw",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A Telegram personal assistant backed by the Gemini CLI JSON protocol.",
+  "description": "Telegram-native Gemini CLI personal AI operator with private allowlisted chats.",
   "scripts": {
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist",

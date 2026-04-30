@@ -1,6 +1,16 @@
-# Telegram Gemini Assistant
+# Gemini Claw
 
-A small TypeScript Telegram bot that delegates personal-assistant requests to the official `gemini` CLI through its JSON/JSONL automation protocol.
+Telegram-native Gemini CLI personal AI operator with private allowlisted chats.
+
+Gemini Claw turns a Telegram bot into a private operator interface for the official `gemini` CLI. It keeps the transport small, typed, and safe by default: only allowlisted Telegram users can talk to it, it only works in private chats, and the Gemini integration is isolated behind a replaceable adapter.
+
+## Why it is useful
+
+- Chat with Gemini CLI from Telegram without exposing a public web UI.
+- Keep local session continuity through Gemini CLI session IDs.
+- Use JSON or stream-JSON output parsing for automation-friendly responses.
+- Keep secrets and local session data out of git by default.
+- Upgrade toward tool-rich autonomy without making Telegram an unrestricted remote shell.
 
 ## Setup
 
