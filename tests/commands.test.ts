@@ -53,7 +53,6 @@ describe("registerCommands", () => {
       "status",
       "tools",
       "plan",
-      "yolo",
       "task",
       "tasks",
       "task_status",
@@ -72,7 +71,6 @@ describe("registerCommands", () => {
     expect(reply).toContain("/status");
     expect(reply).toContain("/tools");
     expect(reply).toContain("/plan");
-    expect(reply).toContain("/yolo");
     expect(reply).toContain("/task <prompt>");
     expect(reply).toContain("/workers");
     expect(reply).toContain("/subagents");
@@ -108,18 +106,11 @@ describe("registerCommands", () => {
 
     expect(reply).toContain("Operating plan:");
     expect(reply).toContain("private allowlisted Telegram messages");
-    expect(reply).toContain("YOLO automation enabled");
+    expect(reply).toContain("YOLO automation is always enabled");
+    expect(reply).toContain("runs with --yolo for every request");
     expect(reply).toContain("explicit allowlist configured");
     expect(reply).toContain("Workers: 3 total, 2 per chat, isolated sessions.");
-  });
-
-  it("shows YOLO state and warning without enabling chat toggles", async () => {
-    const reply = await runCommand("yolo");
-
-    expect(reply).toContain("YOLO is currently enabled.");
-    expect(reply).toContain("Warning:");
-    expect(reply).toContain("GEMINI_YOLO");
-    expect(reply).toContain("No chat command toggles are enabled.");
+    expect(reply).toContain("/status for runtime settings");
   });
 
   it("describes default and empty tool configuration clearly", async () => {

@@ -73,11 +73,6 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
     await ctx.reply(formatPlanMessage(options));
   });
 
-  bot.command("yolo", async (ctx) => {
-    logCommand(logger, "yolo", ctx.chat?.id, ctx.from?.id);
-    await ctx.reply(formatYoloMessage(options));
-  });
-
   bot.command("task", async (ctx) => {
     if (!ctx.chat || !ctx.from) {
       await ctx.reply("Cannot start a task without a private chat and user.");
@@ -184,7 +179,6 @@ export function formatHelpMessage(): string {
     "/status - show safe runtime status.",
     "/tools - show configured tool and extension visibility.",
     "/plan - show the current operating mode summary.",
-    "/yolo - show YOLO mode state and warning.",
     "/task <prompt> - start a background Gemini CLI worker.",
     "/tasks - list running and recent tasks.",
     "/task_status <id> - show one task's status.",
@@ -227,18 +221,11 @@ export function formatPlanMessage(options: OperatorCommandOptions): string {
     "Operating plan:",
     "Accept private allowlisted Telegram messages, send them to Gemini CLI, and return the response here.",
     "Use /task for concurrent background workers; normal chat stays sequential.",
-    `Mode: ${options.yolo ? "YOLO automation enabled" : "approval-gated/default automation"}.`,
+    "Mode: YOLO automation is always enabled; Gemini CLI runs with --yolo for every request.",
     `Tools: ${options.allowedTools.length > 0 ? "explicit allowlist configured" : "Gemini CLI defaults"}.`,
     `Workers: ${options.maxWorkers} total, ${options.maxChatWorkers} per chat, ${options.workerSessionMode} sessions.`,
+    "Use /status for runtime settings and /tools for tool, MCP, extension, and subagent visibility.",
     "Use /reset if this chat needs a fresh Gemini CLI session mapping."
-  ].join("\n");
-}
-
-export function formatYoloMessage(options: OperatorCommandOptions): string {
-  return [
-    `YOLO is currently ${formatEnabled(options.yolo)}.`,
-    "Warning: YOLO can allow Gemini CLI to act with fewer confirmations. Keep it off unless you explicitly trust the runtime and tool scope.",
-    "Control is environment-driven with GEMINI_YOLO; restart the bot after changing it. No chat command toggles are enabled."
   ].join("\n");
 }
 

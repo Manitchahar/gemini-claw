@@ -22,7 +22,7 @@ describe("config", () => {
     expect(config.geminiOutputFormat).toBe("json");
     expect(config.geminiTimeoutMs).toBe(120_000);
     expect(config.telegramAllowedUserIds.has("123")).toBe(true);
-    expect(config.geminiYolo).toBe(false);
+    expect(config.geminiYolo).toBe(true);
     expect(config.geminiApprovalMode).toBeUndefined();
     expect(config.geminiSandbox).toBe(false);
     expect(config.geminiDebug).toBe(false);
@@ -54,13 +54,16 @@ describe("config", () => {
 
   it("rejects invalid boolean values", () => {
     expect(() => parseBooleanConfig("maybe", "TEST_BOOLEAN")).toThrow(ConfigurationError);
-    expect(() =>
+  });
+
+  it("keeps Gemini YOLO enabled regardless of legacy GEMINI_YOLO env values", () => {
+    expect(
       loadConfig({
         TELEGRAM_BOT_TOKEN: "token",
         TELEGRAM_ALLOWED_USER_IDS: "123",
-        GEMINI_YOLO: "maybe"
-      })
-    ).toThrow(ConfigurationError);
+        GEMINI_YOLO: "false"
+      }).geminiYolo
+    ).toBe(true);
   });
 
   it("parses comma-separated lists by trimming and dropping empty entries", () => {
@@ -76,7 +79,6 @@ describe("config", () => {
     const config = loadConfig({
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_ALLOWED_USER_IDS: "123",
-      GEMINI_YOLO: "yes",
       GEMINI_APPROVAL_MODE: "auto_edit",
       GEMINI_SANDBOX: "on",
       GEMINI_DEBUG: "1",
