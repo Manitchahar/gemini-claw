@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { loadConfig, parseAllowedUserIds } from "../src/config.js";
+import { loadConfig, parseAllowedUserIds, parseBooleanConfig, parseCommaSeparatedList } from "../src/config.js";
 import { ConfigurationError } from "../src/utils/errors.js";
 
 describe("config", () => {
@@ -22,5 +22,71 @@ describe("config", () => {
     expect(config.geminiOutputFormat).toBe("json");
     expect(config.geminiTimeoutMs).toBe(120_000);
     expect(config.telegramAllowedUserIds.has("123")).toBe(true);
+    expect(config.geminiYolo).toBe(false);
+    expect(config.geminiApprovalMode).toBeUndefined();
+    expect(config.geminiSandbox).toBe(false);
+    expect(config.geminiDebug).toBe(false);
+    expect(config.geminiCwd).toBeUndefined();
+    expect(config.geminiAllowedTools).toEqual([]);
+    expect(config.geminiAllowedMcpServerNames).toEqual([]);
+    expect(config.geminiExtensions).toEqual([]);
+    expect(config.geminiIncludeDirectories).toEqual([]);
+    expect(config.geminiSettings).toBeUndefined();
+  });
+
+  it.each(["true", "1", "yes", "on", " TRUE "])("parses %s as true", (value) => {
+    expect(parseBooleanConfig(value, "TEST_BOOLEAN")).toBe(true);
+  });
+
+  it.each(["false", "0", "no", "off", " FALSE "])("parses %s as false", (value) => {
+    expect(parseBooleanConfig(value, "TEST_BOOLEAN", true)).toBe(false);
+  });
+
+  it("rejects invalid boolean values", () => {
+    expect(() => parseBooleanConfig("maybe", "TEST_BOOLEAN")).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({
+        TELEGRAM_BOT_TOKEN: "token",
+        TELEGRAM_ALLOWED_USER_IDS: "123",
+        GEMINI_YOLO: "maybe"
+      })
+    ).toThrow(ConfigurationError);
+  });
+
+  it("parses comma-separated lists by trimming and dropping empty entries", () => {
+    expect(parseCommaSeparatedList(" read_file, , run_shell,write_file ,, ")).toEqual([
+      "read_file",
+      "run_shell",
+      "write_file"
+    ]);
+    expect(parseCommaSeparatedList(undefined)).toEqual([]);
+  });
+
+  it("loads Gemini automation settings", () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_ALLOWED_USER_IDS: "123",
+      GEMINI_YOLO: "yes",
+      GEMINI_APPROVAL_MODE: "auto_edit",
+      GEMINI_SANDBOX: "on",
+      GEMINI_DEBUG: "1",
+      GEMINI_CWD: " /workspace/project ",
+      GEMINI_ALLOWED_TOOLS: "read_file, run_shell, ,write_file",
+      GEMINI_ALLOWED_MCP_SERVER_NAMES: "github, filesystem",
+      GEMINI_EXTENSIONS: "ext-a, ext-b",
+      GEMINI_INCLUDE_DIRECTORIES: "src, tests",
+      GEMINI_SETTINGS: " settings.json "
+    });
+
+    expect(config.geminiYolo).toBe(true);
+    expect(config.geminiApprovalMode).toBe("auto_edit");
+    expect(config.geminiSandbox).toBe(true);
+    expect(config.geminiDebug).toBe(true);
+    expect(config.geminiCwd).toBe("/workspace/project");
+    expect(config.geminiAllowedTools).toEqual(["read_file", "run_shell", "write_file"]);
+    expect(config.geminiAllowedMcpServerNames).toEqual(["github", "filesystem"]);
+    expect(config.geminiExtensions).toEqual(["ext-a", "ext-b"]);
+    expect(config.geminiIncludeDirectories).toEqual(["src", "tests"]);
+    expect(config.geminiSettings).toBe("settings.json");
   });
 });

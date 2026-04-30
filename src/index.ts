@@ -12,7 +12,17 @@ async function main(): Promise<void> {
     command: config.geminiCliCommand,
     outputFormat: config.geminiOutputFormat,
     timeoutMs: config.geminiTimeoutMs,
-    model: config.geminiModel
+    model: config.geminiModel,
+    yolo: config.geminiYolo,
+    approvalMode: config.geminiApprovalMode,
+    sandbox: config.geminiSandbox,
+    debug: config.geminiDebug,
+    cwd: config.geminiCwd,
+    allowedTools: config.geminiAllowedTools,
+    allowedMcpServerNames: config.geminiAllowedMcpServerNames,
+    extensions: config.geminiExtensions,
+    includeDirectories: config.geminiIncludeDirectories,
+    settings: config.geminiSettings
   });
   const sessionStore = new JsonSessionStore(config.sessionStorePath);
   const assistant = new AssistantService(geminiClient, sessionStore, {

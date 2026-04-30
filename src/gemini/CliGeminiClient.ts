@@ -9,12 +9,31 @@ export interface CliGeminiClientOptions {
   outputFormat: "json" | "stream-json";
   timeoutMs: number;
   model?: string;
+  yolo?: boolean;
+  approvalMode?: string;
+  sandbox?: boolean;
+  debug?: boolean;
+  cwd?: string;
+  allowedTools?: string[];
+  allowedMcpServerNames?: string[];
+  extensions?: string[];
+  includeDirectories?: string[];
+  settings?: string;
 }
 
 export interface GeminiCliArgsOptions {
   outputFormat: "json" | "stream-json";
   model?: string;
   sessionId?: string;
+  yolo?: boolean;
+  approvalMode?: string;
+  sandbox?: boolean;
+  debug?: boolean;
+  allowedTools?: string[];
+  allowedMcpServerNames?: string[];
+  extensions?: string[];
+  includeDirectories?: string[];
+  settings?: string;
 }
 
 export class CliGeminiClient implements GeminiClient {
@@ -58,7 +77,38 @@ export function buildGeminiCliArgs(prompt: string, options: GeminiCliArgsOptions
     args.push("--resume", options.sessionId);
   }
 
+  if (options.yolo) {
+    args.push("--yolo");
+  }
+
+  if (options.approvalMode) {
+    args.push("--approval-mode", options.approvalMode);
+  }
+
+  if (options.sandbox) {
+    args.push("--sandbox");
+  }
+
+  if (options.debug) {
+    args.push("--debug");
+  }
+
+  appendCommaListArg(args, "--allowed-tools", options.allowedTools);
+  appendCommaListArg(args, "--allowed-mcp-server-names", options.allowedMcpServerNames);
+  appendCommaListArg(args, "--extensions", options.extensions);
+  appendCommaListArg(args, "--include-directories", options.includeDirectories);
+
+  if (options.settings) {
+    args.push("--settings", options.settings);
+  }
+
   return args;
+}
+
+function appendCommaListArg(args: string[], flag: string, values: string[] | undefined): void {
+  if (values && values.length > 0) {
+    args.push(flag, values.join(","));
+  }
 }
 
 function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<CommandOutput> {
@@ -67,7 +117,8 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
   return new Promise((resolve, reject) => {
     const child = spawn(options.command, args, {
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["ignore", "pipe", "pipe"],
+      ...(options.cwd ? { cwd: options.cwd } : {})
     });
 
     let stdout = "";
@@ -157,7 +208,10 @@ export function parseGeminiStreamJsonOutput(stdout: string): AssistantEvent[] {
   const parsedEvents = parseJsonSequence(stdout);
 
   for (const parsed of parsedEvents) {
-    throwIfStructuredError(parsed);
+    if (!isStreamToolResultEvent(parsed)) {
+      throwIfStructuredError(parsed);
+    }
+
     const event = normalizeStreamEvent(parsed);
     if (event) {
       events.push(event);
@@ -221,17 +275,18 @@ function normalizeStreamEvent(event: unknown): AssistantEvent | undefined {
   const role = extractRole(event);
   const text = extractText(event);
 
-  if (type === "init" || type === "result") {
-    const sessionId = extractStringProperty(event, ["sessionId", "session_id", "conversationId", "conversation_id"]);
-    return { type: "stats", sessionId, raw: event };
-  }
-
-  if (type === "message") {
-    if (role !== "assistant" || !text) {
-      return undefined;
-    }
-
-    return { type: "content_delta", text };
+  switch (type) {
+    case "init":
+    case "result":
+      return normalizeStreamStatsEvent(event);
+    case "message":
+      return role === "assistant" && text ? { type: "content_delta", text } : undefined;
+    case "tool_use":
+      return normalizeStreamToolUseEvent(event);
+    case "tool_result":
+      return normalizeStreamToolResultEvent(event);
+    case "error":
+      throwStructuredError(event);
   }
 
   if (role && role !== "assistant") {
@@ -275,11 +330,39 @@ function normalizeStreamEvent(event: unknown): AssistantEvent | undefined {
   return undefined;
 }
 
+function isStreamToolResultEvent(event: unknown): boolean {
+  return isRecord(event) && event.type === "tool_result";
+}
+
+function normalizeStreamStatsEvent(event: Record<string, unknown>): AssistantEvent {
+  const sessionId = extractSessionId(event);
+  return { type: "stats", sessionId, raw: event };
+}
+
+function normalizeStreamToolUseEvent(event: Record<string, unknown>): AssistantEvent | undefined {
+  const toolName = extractToolName(event);
+  return toolName ? { type: "tool_start", name: toolName } : undefined;
+}
+
+function normalizeStreamToolResultEvent(event: Record<string, unknown>): AssistantEvent | undefined {
+  const toolName = extractToolName(event);
+  return toolName ? { type: "tool_end", name: toolName, success: !extractErrorMessage(event) } : undefined;
+}
+
 function throwIfStructuredError(value: unknown): void {
   const message = extractErrorMessage(value);
   if (message) {
-    throw new GeminiCliError(`Gemini CLI returned an error: ${message}`);
+    throw new GeminiCliError(formatStructuredErrorMessage(message));
   }
+}
+
+function throwStructuredError(value: unknown): never {
+  const message = extractErrorMessage(value) || "Unknown Gemini CLI error";
+  throw new GeminiCliError(formatStructuredErrorMessage(message));
+}
+
+function formatStructuredErrorMessage(message: string): string {
+  return `Gemini CLI returned an error: ${message}`;
 }
 
 function extractErrorMessage(value: unknown): string | undefined {
@@ -374,6 +457,14 @@ function extractStringProperty(value: unknown, keys: string[]): string | undefin
   }
 
   return undefined;
+}
+
+function extractSessionId(value: unknown): string | undefined {
+  return extractStringProperty(value, ["sessionId", "session_id", "conversationId", "conversation_id"]);
+}
+
+function extractToolName(value: unknown): string | undefined {
+  return extractStringProperty(value, ["name", "toolName", "tool_name"]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

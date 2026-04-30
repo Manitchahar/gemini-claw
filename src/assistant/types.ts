@@ -2,6 +2,7 @@ export interface AssistantRequest {
   chatId: string;
   userId: string;
   text: string;
+  onEvent?: (event: AssistantEvent) => Promise<void> | void;
 }
 
 export type AssistantEvent =

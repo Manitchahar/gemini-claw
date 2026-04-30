@@ -13,7 +13,19 @@ export function createTelegramBot(config: AppConfig, assistant: AssistantService
     await requireAllowedUser(ctx, config.telegramAllowedUserIds, next);
   });
 
-  registerCommands(bot, assistant);
+  registerCommands(bot, assistant, {
+    model: config.geminiModel,
+    outputFormat: config.geminiOutputFormat,
+    yolo: config.geminiYolo,
+    approvalMode: config.geminiApprovalMode,
+    sandbox: config.geminiSandbox,
+    debug: config.geminiDebug,
+    allowedTools: config.geminiAllowedTools,
+    allowedMcpServerNames: config.geminiAllowedMcpServerNames,
+    extensions: config.geminiExtensions,
+    includeDirectories: config.geminiIncludeDirectories,
+    settingsConfigured: config.geminiSettings !== undefined
+  });
 
   bot.on(
     "message:text",

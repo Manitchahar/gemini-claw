@@ -1,11 +1,54 @@
-import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildGeminiCliArgs,
+  CliGeminiClient,
   parseGeminiJsonOutput,
   parseGeminiStreamJsonOutput
 } from "../src/gemini/CliGeminiClient.js";
 import { GeminiCliError } from "../src/utils/errors.js";
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn()
+}));
+
+const spawnMock = vi.mocked(spawn);
+
+function mockGeminiCli(stdout: string): void {
+  spawnMock.mockImplementationOnce((() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+      stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+      kill: ReturnType<typeof vi.fn>;
+    };
+
+    child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.kill = vi.fn();
+
+    queueMicrotask(() => {
+      child.stdout.emit("data", stdout);
+      child.emit("close", 0);
+    });
+
+    return child;
+  }) as never);
+}
+
+async function collectEvents(client: CliGeminiClient): Promise<unknown[]> {
+  const events: unknown[] = [];
+  for await (const event of client.sendMessage("hello", { chatId: "1", userId: "2" })) {
+    events.push(event);
+  }
+  return events;
+}
+
+beforeEach(() => {
+  spawnMock.mockReset();
+});
 
 describe("CliGeminiClient parsers", () => {
   it("builds resume args for persisted Gemini sessions", () => {
@@ -84,6 +127,46 @@ describe("CliGeminiClient parsers", () => {
     ]);
   });
 
+  it("normalizes stream-json init events into stats", () => {
+    expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "init", sessionId: "init-session", model: "gemini-test" }))).toEqual([
+      { type: "stats", sessionId: "init-session", raw: { type: "init", sessionId: "init-session", model: "gemini-test" } }
+    ]);
+  });
+
+  it("normalizes stream-json tool_use events into tool_start", () => {
+    expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "tool_use", toolName: "ReadFile" }))).toEqual([
+      { type: "tool_start", name: "ReadFile" }
+    ]);
+  });
+
+  it("normalizes successful stream-json tool_result events into tool_end", () => {
+    expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "tool_result", tool_name: "ReadFile", result: "ok" }))).toEqual([
+      { type: "tool_end", name: "ReadFile", success: true }
+    ]);
+  });
+
+  it("normalizes failing stream-json tool_result events without throwing", () => {
+    expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "tool_result", name: "ReadFile", error: { message: "missing" } }))).toEqual([
+      { type: "tool_end", name: "ReadFile", success: false }
+    ]);
+  });
+
+  it("normalizes result session id variants into stats", () => {
+    const output = [
+      JSON.stringify({ type: "result", sessionId: "session-camel" }),
+      JSON.stringify({ type: "result", session_id: "session-snake" }),
+      JSON.stringify({ type: "result", conversationId: "conversation-camel" }),
+      JSON.stringify({ type: "result", conversation_id: "conversation-snake" })
+    ].join("\n");
+
+    expect(parseGeminiStreamJsonOutput(output)).toEqual([
+      { type: "stats", sessionId: "session-camel", raw: { type: "result", sessionId: "session-camel" } },
+      { type: "stats", sessionId: "session-snake", raw: { type: "result", session_id: "session-snake" } },
+      { type: "stats", sessionId: "conversation-camel", raw: { type: "result", conversationId: "conversation-camel" } },
+      { type: "stats", sessionId: "conversation-snake", raw: { type: "result", conversation_id: "conversation-snake" } }
+    ]);
+  });
+
   it("keeps final stream-json events final", () => {
     expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "content_final", text: "Finished" }))).toEqual([
       { type: "content_final", text: "Finished" }
@@ -114,6 +197,10 @@ describe("CliGeminiClient parsers", () => {
     );
   });
 
+  it("throws on stream-json structured errors without explicit error event types", () => {
+    expect(() => parseGeminiStreamJsonOutput(JSON.stringify({ error: { message: "no auth" } }))).toThrow(GeminiCliError);
+  });
+
   it("does not fall back to echoing user stream messages", () => {
     expect(parseGeminiStreamJsonOutput(JSON.stringify({ type: "message", role: "user", text: "do not echo" }))).toEqual([]);
   });
@@ -127,5 +214,147 @@ describe("CliGeminiClient parsers", () => {
     expect(parseGeminiStreamJsonOutput(output)).toEqual([
       { type: "stats", sessionId: "session-2", raw: { type: "result", session_id: "session-2", status: "success" } }
     ]);
+  });
+});
+
+describe("buildGeminiCliArgs", () => {
+  it("omits automation flags by default", () => {
+    expect(buildGeminiCliArgs("hello", { outputFormat: "json" })).toEqual(["--prompt", "hello", "--output-format", "json"]);
+  });
+
+  it("emits yolo, debug, and sandbox booleans when enabled", () => {
+    expect(buildGeminiCliArgs("hello", { outputFormat: "json", yolo: true, debug: true, sandbox: true })).toEqual([
+      "--prompt",
+      "hello",
+      "--output-format",
+      "json",
+      "--yolo",
+      "--sandbox",
+      "--debug"
+    ]);
+  });
+
+  it("emits list flags as comma-separated values", () => {
+    expect(
+      buildGeminiCliArgs("hello", {
+        outputFormat: "json",
+        allowedTools: ["ReadFile", "Shell"],
+        allowedMcpServerNames: ["github", "filesystem"],
+        extensions: ["ext-a", "ext-b"],
+        includeDirectories: ["src", "tests"]
+      })
+    ).toEqual([
+      "--prompt",
+      "hello",
+      "--output-format",
+      "json",
+      "--allowed-tools",
+      "ReadFile,Shell",
+      "--allowed-mcp-server-names",
+      "github,filesystem",
+      "--extensions",
+      "ext-a,ext-b",
+      "--include-directories",
+      "src,tests"
+    ]);
+  });
+
+  it("emits approval mode and settings", () => {
+    expect(
+      buildGeminiCliArgs("hello", {
+        outputFormat: "json",
+        approvalMode: "auto_edit",
+        settings: ".gemini/settings.json"
+      })
+    ).toEqual([
+      "--prompt",
+      "hello",
+      "--output-format",
+      "json",
+      "--approval-mode",
+      "auto_edit",
+      "--settings",
+      ".gemini/settings.json"
+    ]);
+  });
+
+  it("emits combined automation flags after existing prompt, output, model, and resume args", () => {
+    expect(
+      buildGeminiCliArgs("hello", {
+        outputFormat: "stream-json",
+        model: "gemini-test",
+        sessionId: "session-1",
+        yolo: true,
+        approvalMode: "yolo",
+        sandbox: true,
+        debug: true,
+        allowedTools: ["ReadFile", "Shell"],
+        allowedMcpServerNames: ["github"],
+        extensions: ["ext-a"],
+        includeDirectories: ["src"],
+        settings: "settings.json"
+      })
+    ).toEqual([
+      "--prompt",
+      "hello",
+      "--output-format",
+      "stream-json",
+      "--model",
+      "gemini-test",
+      "--resume",
+      "session-1",
+      "--yolo",
+      "--approval-mode",
+      "yolo",
+      "--sandbox",
+      "--debug",
+      "--allowed-tools",
+      "ReadFile,Shell",
+      "--allowed-mcp-server-names",
+      "github",
+      "--extensions",
+      "ext-a",
+      "--include-directories",
+      "src",
+      "--settings",
+      "settings.json"
+    ]);
+  });
+});
+
+describe("CliGeminiClient", () => {
+  it("preserves default spawn options when cwd is not configured", async () => {
+    mockGeminiCli(JSON.stringify({ response: "done" }));
+
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "json",
+      timeoutMs: 1_000
+    });
+
+    await expect(collectEvents(client)).resolves.toContainEqual({ type: "content_final", text: "done" });
+    expect(spawnMock).toHaveBeenCalledWith(
+      "gemini",
+      ["--prompt", "hello", "--output-format", "json"],
+      expect.not.objectContaining({ cwd: expect.any(String) })
+    );
+  });
+
+  it("passes configured cwd into spawn options", async () => {
+    mockGeminiCli(JSON.stringify({ response: "done" }));
+
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "json",
+      timeoutMs: 1_000,
+      cwd: "/workspace/project"
+    });
+
+    await expect(collectEvents(client)).resolves.toContainEqual({ type: "content_final", text: "done" });
+    expect(spawnMock).toHaveBeenCalledWith(
+      "gemini",
+      ["--prompt", "hello", "--output-format", "json"],
+      expect.objectContaining({ cwd: "/workspace/project" })
+    );
   });
 });

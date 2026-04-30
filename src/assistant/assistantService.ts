@@ -36,6 +36,10 @@ export class AssistantService {
       userId: request.userId,
       sessionId: session.geminiSessionId
     })) {
+      if (event.type === "tool_start" || event.type === "tool_end") {
+        await request.onEvent?.(event);
+      }
+
       if (event.type === "content_delta") {
         contentChunks.push(event.text);
       }

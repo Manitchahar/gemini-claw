@@ -99,9 +99,41 @@ describe("createTextMessageHandler", () => {
     expect(assistant.respondToText).toHaveBeenCalledWith({
       chatId: "123",
       userId: "456",
-      text: "hello"
+      text: "hello",
+      onEvent: expect.any(Function)
     });
     expect(reply).toHaveBeenCalledWith("Done");
+  });
+
+  it("sends concise tool progress replies before the final response", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn(async (request) => {
+        await request.onEvent?.({ type: "tool_start", name: "ReadFile" });
+        await request.onEvent?.({ type: "tool_start", name: "ReadFile" });
+        await request.onEvent?.({ type: "tool_end", name: "ReadFile", success: true });
+        return "Done";
+      })
+    };
+    const sendChatAction = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      typingActionIntervalMs: 1000,
+      toolProgressIntervalMs: 0
+    });
+
+    await handler(
+      createContext({
+        text: "hello",
+        sendChatAction,
+        reply
+      })
+    );
+
+    expect(reply).toHaveBeenNthCalledWith(1, "🔧 ReadFile started.");
+    expect(reply).toHaveBeenNthCalledWith(2, "✅ ReadFile finished.");
+    expect(reply).toHaveBeenNthCalledWith(3, "Done");
   });
 });
 

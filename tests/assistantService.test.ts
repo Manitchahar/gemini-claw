@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AssistantService } from "../src/assistant/assistantService.js";
 import type { AssistantEvent } from "../src/assistant/types.js";
@@ -53,6 +53,33 @@ describe("AssistantService", () => {
     await expect(responsePromise).resolves.toBe("Done");
     await resetPromise;
     expect(await store.getSession("chat-1")).toBeUndefined();
+  });
+
+  it("surfaces tool progress events through the request callback without changing the final response", async () => {
+    const gemini = new FakeGeminiClient([
+      { type: "tool_start", name: "ReadFile" },
+      { type: "content_delta", text: "Do" },
+      { type: "content_delta", text: "ne" },
+      { type: "tool_end", name: "ReadFile", success: true },
+      { type: "stats", sessionId: "session-1" }
+    ]);
+    const store = new MemorySessionStore();
+    const service = new AssistantService(gemini, store, {
+      systemInstruction: "Be useful."
+    });
+    const onEvent = vi.fn();
+
+    const response = await service.respondToText({
+      chatId: "chat-1",
+      userId: "user-1",
+      text: "hello",
+      onEvent
+    });
+
+    expect(response).toBe("Done");
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEvent).toHaveBeenNthCalledWith(1, { type: "tool_start", name: "ReadFile" });
+    expect(onEvent).toHaveBeenNthCalledWith(2, { type: "tool_end", name: "ReadFile", success: true });
   });
 });
 

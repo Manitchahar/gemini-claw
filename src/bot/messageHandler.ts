@@ -1,15 +1,18 @@
 import type { Context } from "grammy";
 
 import type { AssistantService } from "../assistant/assistantService.js";
+import type { AssistantEvent } from "../assistant/types.js";
 import { GeminiCliError } from "../utils/errors.js";
 import { chunkTelegramMessage } from "./messageUtils.js";
 
 const DEFAULT_TYPING_ACTION_INTERVAL_MS = 4_000;
+const DEFAULT_TOOL_PROGRESS_INTERVAL_MS = 1_500;
 
 export interface MessageHandlerOptions {
   assistant: Pick<AssistantService, "respondToText">;
   responseChunkSize: number;
   typingActionIntervalMs?: number;
+  toolProgressIntervalMs?: number;
 }
 
 export function createTextMessageHandler(options: MessageHandlerOptions) {
@@ -31,10 +34,15 @@ export function createTextMessageHandler(options: MessageHandlerOptions) {
       let response: string;
 
       try {
+        const progress = createToolProgressReporter(
+          ctx,
+          options.toolProgressIntervalMs ?? DEFAULT_TOOL_PROGRESS_INTERVAL_MS
+        );
         response = await options.assistant.respondToText({
           chatId: String(ctx.chat.id),
           userId: String(ctx.from.id),
-          text
+          text,
+          onEvent: (event) => progress(event)
         });
       } finally {
         stopTyping();
@@ -48,6 +56,57 @@ export function createTextMessageHandler(options: MessageHandlerOptions) {
       await ctx.reply("Sorry, I could not complete that request.");
     }
   };
+}
+
+function createToolProgressReporter(ctx: Context, intervalMs: number): (event: AssistantEvent) => Promise<void> {
+  let lastSentAt = Number.NEGATIVE_INFINITY;
+  let lastProgressKey = "";
+
+  return async (event: AssistantEvent): Promise<void> => {
+    if (event.type !== "tool_start" && event.type !== "tool_end") {
+      return;
+    }
+
+    const text = formatToolProgress(event);
+    if (!text) {
+      return;
+    }
+
+    const key = event.type === "tool_end" ? `${event.type}:${event.name}:${event.success}` : `${event.type}:${event.name}`;
+    const now = Date.now();
+    const isCompletingLastStartedTool = event.type === "tool_end" && lastProgressKey === `tool_start:${event.name}`;
+    if (key === lastProgressKey || (!isCompletingLastStartedTool && now - lastSentAt < intervalMs)) {
+      return;
+    }
+
+    lastProgressKey = key;
+    lastSentAt = now;
+
+    try {
+      await ctx.reply(text);
+    } catch (error) {
+      console.error(formatErrorForLogs(error));
+    }
+  };
+}
+
+function formatToolProgress(event: AssistantEvent): string | undefined {
+  if (event.type === "tool_start") {
+    return `🔧 ${sanitizeToolName(event.name)} started.`;
+  }
+
+  if (event.type === "tool_end") {
+    const status = event.success ? "finished" : "failed";
+    const icon = event.success ? "✅" : "⚠️";
+    return `${icon} ${sanitizeToolName(event.name)} ${status}.`;
+  }
+
+  return undefined;
+}
+
+function sanitizeToolName(name: string): string {
+  const normalized = name.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalized.slice(0, 80) || "Tool";
 }
 
 function startTypingIndicator(ctx: Context, intervalMs: number): () => void {
