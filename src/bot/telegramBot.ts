@@ -2,11 +2,12 @@ import { Bot, GrammyError, HttpError } from "grammy";
 
 import type { AssistantService } from "../assistant/assistantService.js";
 import type { AppConfig } from "../config.js";
+import type { OperatorLogger } from "../utils/operatorLogger.js";
 import { requireAllowedUser } from "./auth.js";
 import { registerCommands } from "./commands.js";
 import { createTextMessageHandler } from "./messageHandler.js";
 
-export function createTelegramBot(config: AppConfig, assistant: AssistantService): Bot {
+export function createTelegramBot(config: AppConfig, assistant: AssistantService, logger?: OperatorLogger): Bot {
   const bot = new Bot(config.telegramBotToken);
 
   bot.use(async (ctx, next) => {
@@ -31,14 +32,16 @@ export function createTelegramBot(config: AppConfig, assistant: AssistantService
     maxChatQueuedTasks: config.geminiMaxChatQueuedTasks,
     taskHistoryLimit: config.geminiTaskHistoryLimit,
     workerSessionMode: config.geminiWorkerSessionMode,
-    responseChunkSize: config.telegramResponseChunkSize
+    responseChunkSize: config.telegramResponseChunkSize,
+    logger
   });
 
   bot.on(
     "message:text",
     createTextMessageHandler({
       assistant,
-      responseChunkSize: config.telegramResponseChunkSize
+      responseChunkSize: config.telegramResponseChunkSize,
+      logger
     })
   );
 

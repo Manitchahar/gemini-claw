@@ -38,6 +38,10 @@ describe("config", () => {
     expect(config.geminiMaxChatQueuedTasks).toBe(10);
     expect(config.geminiTaskHistoryLimit).toBe(20);
     expect(config.geminiWorkerSessionMode).toBe("isolated");
+    expect(config.operatorLogStyle).toBe("pretty");
+    expect(config.operatorLogLevel).toBe("info");
+    expect(config.operatorLogContent).toBe(false);
+    expect(config.operatorLogPreviewChars).toBe(120);
   });
 
   it.each(["true", "1", "yes", "on", " TRUE "])("parses %s as true", (value) => {
@@ -87,7 +91,11 @@ describe("config", () => {
       GEMINI_MAX_QUEUED_TASKS: "25",
       GEMINI_MAX_CHAT_QUEUED_TASKS: "7",
       GEMINI_TASK_HISTORY_LIMIT: "50",
-      GEMINI_WORKER_SESSION_MODE: "chat"
+      GEMINI_WORKER_SESSION_MODE: "chat",
+      OPERATOR_LOG_STYLE: "json",
+      OPERATOR_LOG_LEVEL: "debug",
+      OPERATOR_LOG_CONTENT: "true",
+      OPERATOR_LOG_PREVIEW_CHARS: "80"
     });
 
     expect(config.geminiYolo).toBe(true);
@@ -106,5 +114,27 @@ describe("config", () => {
     expect(config.geminiMaxChatQueuedTasks).toBe(7);
     expect(config.geminiTaskHistoryLimit).toBe(50);
     expect(config.geminiWorkerSessionMode).toBe("chat");
+    expect(config.operatorLogStyle).toBe("json");
+    expect(config.operatorLogLevel).toBe("debug");
+    expect(config.operatorLogContent).toBe(true);
+    expect(config.operatorLogPreviewChars).toBe(80);
+  });
+
+  it("rejects invalid operator logging settings", () => {
+    expect(() =>
+      loadConfig({
+        TELEGRAM_BOT_TOKEN: "token",
+        TELEGRAM_ALLOWED_USER_IDS: "123",
+        OPERATOR_LOG_STYLE: "rainbow"
+      })
+    ).toThrow(ConfigurationError);
+
+    expect(() =>
+      loadConfig({
+        TELEGRAM_BOT_TOKEN: "token",
+        TELEGRAM_ALLOWED_USER_IDS: "123",
+        OPERATOR_LOG_CONTENT: "maybe"
+      })
+    ).toThrow(ConfigurationError);
   });
 });

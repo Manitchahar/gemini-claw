@@ -29,6 +29,10 @@ const envSchema = z.object({
   GEMINI_MAX_CHAT_QUEUED_TASKS: z.coerce.number().int().positive().default(10),
   GEMINI_TASK_HISTORY_LIMIT: z.coerce.number().int().positive().default(20),
   GEMINI_WORKER_SESSION_MODE: z.enum(["isolated", "chat"]).default("isolated"),
+  OPERATOR_LOG_STYLE: z.enum(["pretty", "plain", "json"]).default("pretty"),
+  OPERATOR_LOG_LEVEL: z.enum(["silent", "info", "debug"]).default("info"),
+  OPERATOR_LOG_CONTENT: z.string().optional(),
+  OPERATOR_LOG_PREVIEW_CHARS: z.coerce.number().int().positive().default(120),
   SESSION_STORE_PATH: z.string().trim().min(1).default(".data/sessions.json"),
   TELEGRAM_RESPONSE_CHUNK_SIZE: z.coerce.number().int().min(500).max(4096).default(3900),
   ASSISTANT_SYSTEM_INSTRUCTION: z.string().trim().optional()
@@ -36,6 +40,8 @@ const envSchema = z.object({
 
 export type GeminiOutputFormat = "json" | "stream-json";
 export type GeminiWorkerSessionMode = "isolated" | "chat";
+export type OperatorLogStyle = "pretty" | "plain" | "json";
+export type OperatorLogLevel = "silent" | "info" | "debug";
 
 export interface AppConfig {
   telegramBotToken: string;
@@ -60,6 +66,10 @@ export interface AppConfig {
   geminiMaxChatQueuedTasks: number;
   geminiTaskHistoryLimit: number;
   geminiWorkerSessionMode: GeminiWorkerSessionMode;
+  operatorLogStyle: OperatorLogStyle;
+  operatorLogLevel: OperatorLogLevel;
+  operatorLogContent: boolean;
+  operatorLogPreviewChars: number;
   sessionStorePath: string;
   telegramResponseChunkSize: number;
   assistantSystemInstruction: string;
@@ -149,6 +159,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     geminiMaxChatQueuedTasks: data.GEMINI_MAX_CHAT_QUEUED_TASKS,
     geminiTaskHistoryLimit: data.GEMINI_TASK_HISTORY_LIMIT,
     geminiWorkerSessionMode: data.GEMINI_WORKER_SESSION_MODE,
+    operatorLogStyle: data.OPERATOR_LOG_STYLE,
+    operatorLogLevel: data.OPERATOR_LOG_LEVEL,
+    operatorLogContent: parseBooleanConfig(data.OPERATOR_LOG_CONTENT, "OPERATOR_LOG_CONTENT"),
+    operatorLogPreviewChars: data.OPERATOR_LOG_PREVIEW_CHARS,
     sessionStorePath: data.SESSION_STORE_PATH,
     telegramResponseChunkSize: data.TELEGRAM_RESPONSE_CHUNK_SIZE,
     assistantSystemInstruction: data.ASSISTANT_SYSTEM_INSTRUCTION || DEFAULT_SYSTEM_INSTRUCTION

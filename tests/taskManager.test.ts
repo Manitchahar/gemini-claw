@@ -5,6 +5,7 @@ import { AssistantTaskManager, TaskQueueFullError } from "../src/assistant/taskM
 import type { AssistantEvent } from "../src/assistant/types.js";
 import type { GeminiClient, GeminiClientContext } from "../src/gemini/GeminiClient.js";
 import type { SessionRecord, SessionStore } from "../src/storage/SessionStore.js";
+import type { OperatorLogger } from "../src/utils/operatorLogger.js";
 
 describe("AssistantTaskManager", () => {
   it("queues tasks beyond the configured worker limit", async () => {
@@ -54,6 +55,25 @@ describe("AssistantTaskManager", () => {
       response: "done"
     });
     expect(manager.getSubagentStatus("chat-1").observedSubagents).toEqual(["research-agent"]);
+  });
+
+  it("logs task lifecycle, tools, and observed subagents", async () => {
+    const logger = createCaptureLogger();
+    const gemini = new ImmediateGeminiClient([
+      { type: "tool_start", name: "RunSubAgent", possibleSubagentName: "research-agent" },
+      { type: "tool_end", name: "RunSubAgent", success: true, possibleSubagentName: "research-agent" },
+      { type: "content_final", text: "done" }
+    ]);
+    const manager = createManager(gemini, { logger });
+
+    const task = manager.startTask({ chatId: "chat-1", userId: "user-1", text: "research this repo" });
+
+    await vi.waitFor(() => expect(manager.getTask("chat-1", task.id)?.status).toBe("succeeded"));
+    expect(logger.info).toHaveBeenCalledWith("task_queued", expect.objectContaining({ id: task.id, preview: "research this repo" }));
+    expect(logger.info).toHaveBeenCalledWith("task_running", expect.objectContaining({ id: task.id }));
+    expect(logger.info).toHaveBeenCalledWith("tool_start", expect.objectContaining({ id: task.id, name: "RunSubAgent" }));
+    expect(logger.info).toHaveBeenCalledWith("subagent", expect.objectContaining({ id: task.id, name: "research-agent" }));
+    expect(logger.info).toHaveBeenCalledWith("task_completed", expect.objectContaining({ id: task.id, chars: 4, tools: 1 }));
   });
 
   it("rejects tasks when the per-chat queue is full", () => {
@@ -163,4 +183,15 @@ class MemorySessionStore implements SessionStore {
   async deleteSession(chatId: string): Promise<void> {
     this.sessions.delete(chatId);
   }
+}
+
+function createCaptureLogger(): OperatorLogger {
+  return {
+    includeContent: false,
+    preview: vi.fn((value: string | undefined) => value),
+    banner: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn()
+  };
 }

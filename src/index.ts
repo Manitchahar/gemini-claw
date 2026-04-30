@@ -7,9 +7,16 @@ import { createTelegramBot } from "./bot/telegramBot.js";
 import { loadConfig } from "./config.js";
 import { CliGeminiClient } from "./gemini/CliGeminiClient.js";
 import { JsonSessionStore } from "./storage/JsonSessionStore.js";
+import { createOperatorLogger } from "./utils/operatorLogger.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const logger = createOperatorLogger({
+    level: config.operatorLogLevel,
+    style: config.operatorLogStyle,
+    includeContent: config.operatorLogContent,
+    previewChars: config.operatorLogPreviewChars
+  });
   const geminiClient = new CliGeminiClient({
     command: config.geminiCliCommand,
     outputFormat: config.geminiOutputFormat,
@@ -24,7 +31,8 @@ async function main(): Promise<void> {
     allowedMcpServerNames: config.geminiAllowedMcpServerNames,
     extensions: config.geminiExtensions,
     includeDirectories: config.geminiIncludeDirectories,
-    settings: config.geminiSettings
+    settings: config.geminiSettings,
+    logger
   });
   const sessionStore = new JsonSessionStore(config.sessionStorePath);
   const chatQueue = new ChatOperationQueue();
@@ -37,7 +45,8 @@ async function main(): Promise<void> {
     historyLimit: config.geminiTaskHistoryLimit,
     workerSessionMode: config.geminiWorkerSessionMode,
     extensions: config.geminiExtensions,
-    sharedChatQueue: chatQueue
+    sharedChatQueue: chatQueue,
+    logger
   });
   const assistant = new AssistantService(
     geminiClient,
@@ -46,12 +55,21 @@ async function main(): Promise<void> {
       systemInstruction: config.assistantSystemInstruction
     },
     taskManager,
-    chatQueue
+    chatQueue,
+    logger
   );
-  const bot = createTelegramBot(config, assistant);
+  const bot = createTelegramBot(config, assistant, logger);
 
   await bot.start({
     onStart: (botInfo) => {
+      logger.banner({
+        bot: `@${botInfo.username}`,
+        mode: config.geminiYolo ? "YOLO" : "safe",
+        workers: `0/${config.geminiMaxWorkers}`,
+        model: config.geminiModel ?? "default",
+        sessions: config.geminiWorkerSessionMode,
+        extensions: String(config.geminiExtensions.length)
+      });
       console.log(`Telegram Gemini assistant started as @${botInfo.username}`);
     }
   });

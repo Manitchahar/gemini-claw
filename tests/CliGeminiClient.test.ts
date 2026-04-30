@@ -10,6 +10,7 @@ import {
   parseGeminiStreamJsonOutput
 } from "../src/gemini/CliGeminiClient.js";
 import { GeminiCliError } from "../src/utils/errors.js";
+import type { OperatorLogger } from "../src/utils/operatorLogger.js";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn()
@@ -361,4 +362,37 @@ describe("CliGeminiClient", () => {
       expect.objectContaining({ cwd: "/workspace/project" })
     );
   });
+
+  it("logs Gemini CLI subprocess lifecycle without raw stdout", async () => {
+    mockGeminiCli(JSON.stringify({ response: "done" }));
+    const logger = createCaptureLogger();
+
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "json",
+      timeoutMs: 1_000,
+      logger
+    });
+
+    await expect(collectEvents(client)).resolves.toContainEqual({ type: "content_final", text: "done" });
+    expect(logger.info).toHaveBeenCalledWith(
+      "gemini_start",
+      expect.objectContaining({ chat: "1", user: "2", output: "json", prompt_chars: 5, preview: "hello" })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "gemini_done",
+      expect.objectContaining({ chat: "1", status: "ok", stdout_chars: JSON.stringify({ response: "done" }).length })
+    );
+  });
 });
+
+function createCaptureLogger(): OperatorLogger {
+  return {
+    includeContent: false,
+    preview: vi.fn((value: string | undefined) => value),
+    banner: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn()
+  };
+}

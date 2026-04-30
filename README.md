@@ -51,6 +51,10 @@ Gemini Claw turns a Telegram bot into a private operator interface for the offic
    GEMINI_MAX_CHAT_QUEUED_TASKS=10
    GEMINI_TASK_HISTORY_LIMIT=20
    GEMINI_WORKER_SESSION_MODE=isolated
+   OPERATOR_LOG_STYLE=pretty
+   OPERATOR_LOG_LEVEL=info
+   OPERATOR_LOG_CONTENT=false
+   OPERATOR_LOG_PREVIEW_CHARS=120
    ```
 
    `TELEGRAM_ALLOWED_USER_IDS` is a comma-separated list. Messages from any other Telegram user are rejected before Gemini is invoked. This allowlist is mandatory, but it is not a complete safety boundary: a compromised Telegram account or a prompt-injection attack can still issue harmful instructions through an otherwise trusted chat.
@@ -64,6 +68,35 @@ npm run dev
 The bot uses long polling for local development.
 
 For privacy, the bot only responds in direct Telegram chats. Even allowlisted users are rejected in groups and supergroups so assistant output is not exposed to other chat members.
+
+## Terminal operator view
+
+The bot prints a live operator feed so the terminal shows what the Telegram assistant is doing: startup status, incoming chats, Gemini CLI subprocesses, tool/subagent observations, background task lifecycle, worker counts, cancellations, and completions.
+
+```text
+╭─ Gemini Claw online ─────────────────────────────╮
+│ bot=@RockyOperator_bot  mode=YOLO    workers=0/3 │
+│ model=gemini-default   sessions=isolated ext=2   │
+╰──────────────────────────────────────────────────╯
+09:21:05  📨 chat request      chat=123 chars=42 preview="inspect the repo…"
+09:21:05  🧠 gemini start      chat=123 output=stream-json session=present
+09:21:07  🔧 tool start        chat=123 name=ReadFile
+09:21:12  📤 chat reply        chat=123 chars=1800 duration_ms=7200
+09:22:10  🚀 task queued       id=t-0001 workers=0/3 preview="write README…"
+09:22:18  🤖 subagent          id=t-0001 name=research-agent
+09:22:31  ✅ task completed    id=t-0001 tools=3 chars=2500
+```
+
+Operator logging settings:
+
+```bash
+OPERATOR_LOG_STYLE=pretty        # pretty, plain, or json
+OPERATOR_LOG_LEVEL=info          # silent, info, or debug
+OPERATOR_LOG_CONTENT=false       # true prints full prompts/responses
+OPERATOR_LOG_PREVIEW_CHARS=120
+```
+
+The default is screen-recording safe: short previews and metadata only. Set `OPERATOR_LOG_CONTENT=true` only on machines and chats where full prompt/response text is safe to show.
 
 ## Commands
 

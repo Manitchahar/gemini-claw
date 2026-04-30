@@ -4,6 +4,7 @@ import type { SessionRecord, SessionStore } from "../storage/SessionStore.js";
 import { ChatOperationQueue } from "./chatQueue.js";
 import type { ChatOperationRunner } from "./chatQueue.js";
 import { buildAssistantPrompt } from "./prompts.js";
+import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import type { AssistantTaskManager } from "./taskManager.js";
 import type {
   AssistantOptions,
@@ -21,7 +22,8 @@ export class AssistantService {
     private readonly sessionStore: SessionStore,
     private readonly options: AssistantOptions,
     private readonly taskManager?: AssistantTaskManager,
-    private readonly chatQueue: ChatOperationRunner = new ChatOperationQueue()
+    private readonly chatQueue: ChatOperationRunner = new ChatOperationQueue(),
+    private readonly logger: OperatorLogger = noopOperatorLogger
   ) {}
 
   async respondToText(request: AssistantRequest): Promise<string> {
@@ -30,6 +32,7 @@ export class AssistantService {
 
   async resetChat(chatId: string): Promise<void> {
     await this.chatQueue.run(chatId, async () => {
+      this.logger.info("reset", { chat: chatId });
       await this.geminiClient.resetSession?.(chatId);
       await this.sessionStore.deleteSession(chatId);
     });
@@ -65,6 +68,14 @@ export class AssistantService {
     const contentChunks: string[] = [];
     let finalContent = "";
     let nextSessionId = session.geminiSessionId;
+    const startedAt = Date.now();
+
+    this.logger.info("chat_request", {
+      chat: request.chatId,
+      user: request.userId,
+      chars: request.text.length,
+      preview: this.logger.preview(request.text)
+    });
 
     for await (const event of this.geminiClient.sendMessage(prompt, {
       chatId: request.chatId,
@@ -72,6 +83,14 @@ export class AssistantService {
       sessionId: session.geminiSessionId
     })) {
       if (event.type === "tool_start" || event.type === "tool_end") {
+        this.logger.info(event.type === "tool_start" ? "tool_start" : "tool_end", {
+          chat: request.chatId,
+          name: event.name,
+          success: event.type === "tool_end" ? event.success : undefined
+        });
+        if (event.possibleSubagentName) {
+          this.logger.info("subagent", { chat: request.chatId, name: event.possibleSubagentName });
+        }
         await request.onEvent?.(event);
       }
 
@@ -98,7 +117,14 @@ export class AssistantService {
     }
 
     const response = finalContent || contentChunks.join("");
-    return response.trim() || "I did not receive a response from Gemini.";
+    const trimmed = response.trim() || "I did not receive a response from Gemini.";
+    this.logger.info("chat_reply", {
+      chat: request.chatId,
+      chars: trimmed.length,
+      duration_ms: Date.now() - startedAt,
+      preview: this.logger.preview(trimmed)
+    });
+    return trimmed;
   }
 
   private async getOrCreateSession(request: AssistantRequest): Promise<SessionRecord> {

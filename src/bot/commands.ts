@@ -3,6 +3,7 @@ import type { Bot } from "grammy";
 import type { AssistantService } from "../assistant/assistantService.js";
 import { TaskQueueFullError } from "../assistant/taskManager.js";
 import type { AssistantTaskSummary, SubagentStatus, WorkerStats } from "../assistant/types.js";
+import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import { chunkTelegramMessage } from "./messageUtils.js";
 
 export interface OperatorCommandOptions {
@@ -24,10 +25,14 @@ export interface OperatorCommandOptions {
   taskHistoryLimit: number;
   workerSessionMode: "isolated" | "chat";
   responseChunkSize: number;
+  logger?: OperatorLogger;
 }
 
 export function registerCommands(bot: Bot, assistant: AssistantService, options: OperatorCommandOptions): void {
+  const logger = options.logger ?? noopOperatorLogger;
+
   bot.command("start", async (ctx) => {
+    logCommand(logger, "start", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(
       [
         "Hi, I am your private Gemini-powered assistant.",
@@ -39,6 +44,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
   });
 
   bot.command("help", async (ctx) => {
+    logCommand(logger, "help", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatHelpMessage());
   });
 
@@ -47,23 +53,28 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
       return;
     }
 
+    logCommand(logger, "reset", ctx.chat.id, ctx.from?.id);
     await assistant.resetChat(String(ctx.chat.id));
     await ctx.reply("Reset complete.");
   });
 
   bot.command("status", async (ctx) => {
+    logCommand(logger, "status", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatStatusMessage(options));
   });
 
   bot.command("tools", async (ctx) => {
+    logCommand(logger, "tools", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatToolsMessage(options));
   });
 
   bot.command("plan", async (ctx) => {
+    logCommand(logger, "plan", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatPlanMessage(options));
   });
 
   bot.command("yolo", async (ctx) => {
+    logCommand(logger, "yolo", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatYoloMessage(options));
   });
 
@@ -73,6 +84,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
       return;
     }
 
+    logCommand(logger, "task", ctx.chat.id, ctx.from.id);
     const prompt = extractCommandArgument(ctx.message?.text, "task");
     if (!prompt) {
       await ctx.reply("Usage: /task <prompt>");
@@ -96,6 +108,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
       await ctx.reply(`Started task ${task.id}. Use /task_status ${task.id} to check it.`);
     } catch (error) {
       if (error instanceof TaskQueueFullError) {
+        logger.info("task_rejected", { chat: ctx.chat.id, user: ctx.from.id, reason: error.message });
         await ctx.reply(error.message);
         return;
       }
@@ -109,6 +122,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
       return;
     }
 
+    logCommand(logger, "tasks", ctx.chat.id, ctx.from?.id);
     await ctx.reply(formatTasksMessage(assistant.listTasks(String(ctx.chat.id))));
   });
 
@@ -117,6 +131,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
       return;
     }
 
+    logCommand(logger, "task_status", ctx.chat.id, ctx.from?.id);
     const taskId = extractCommandArgument(ctx.message?.text, "task_status");
     if (!taskId) {
       await ctx.reply("Usage: /task_status <task-id>");
@@ -132,6 +147,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
       return;
     }
 
+    logCommand(logger, "cancel", ctx.chat.id, ctx.from?.id);
     const taskId = extractCommandArgument(ctx.message?.text, "cancel");
     if (!taskId) {
       await ctx.reply("Usage: /cancel <task-id>");
@@ -148,10 +164,12 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
   });
 
   bot.command("workers", async (ctx) => {
+    logCommand(logger, "workers", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatWorkersMessage(assistant.getWorkerStats(), options));
   });
 
   bot.command("subagents", async (ctx) => {
+    logCommand(logger, "subagents", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatSubagentsMessage(assistant.getSubagentStatus(ctx.chat ? String(ctx.chat.id) : undefined)));
   });
 }
@@ -312,4 +330,8 @@ function preview(value: string, maxLength: number): string {
   }
 
   return `${compact.slice(0, maxLength - 1)}…`;
+}
+
+function logCommand(logger: OperatorLogger, command: string, chatId: number | string | undefined, userId: number | string | undefined): void {
+  logger.info("command", { command, chat: chatId === undefined ? undefined : String(chatId), user: userId === undefined ? undefined : String(userId) });
 }

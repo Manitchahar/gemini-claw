@@ -3,6 +3,7 @@ import type { Context } from "grammy";
 import type { AssistantService } from "../assistant/assistantService.js";
 import type { AssistantEvent } from "../assistant/types.js";
 import { GeminiCliError } from "../utils/errors.js";
+import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import { chunkTelegramMessage } from "./messageUtils.js";
 
 const DEFAULT_TYPING_ACTION_INTERVAL_MS = 4_000;
@@ -13,6 +14,7 @@ export interface MessageHandlerOptions {
   responseChunkSize: number;
   typingActionIntervalMs?: number;
   toolProgressIntervalMs?: number;
+  logger?: OperatorLogger;
 }
 
 export function createTextMessageHandler(options: MessageHandlerOptions) {
@@ -51,7 +53,14 @@ export function createTextMessageHandler(options: MessageHandlerOptions) {
       for (const chunk of chunkTelegramMessage(response, options.responseChunkSize)) {
         await ctx.reply(chunk);
       }
+      options.logger?.debug("chat_reply", {
+        chat: String(ctx.chat.id),
+        chunks: chunkTelegramMessage(response, options.responseChunkSize).length,
+        chars: response.length
+      });
     } catch (error) {
+      const logger = options.logger ?? noopOperatorLogger;
+      logger.error("chat_error", { chat: ctx.chat ? String(ctx.chat.id) : undefined, error: formatErrorForLogs(error) });
       console.error(formatErrorForLogs(error));
       await ctx.reply("Sorry, I could not complete that request.");
     }
@@ -83,10 +92,10 @@ function createToolProgressReporter(ctx: Context, intervalMs: number): (event: A
     lastSentAt = now;
 
     try {
-      await ctx.reply(text);
-    } catch (error) {
-      console.error(formatErrorForLogs(error));
-    }
+        await ctx.reply(text);
+      } catch (error) {
+        console.error(formatErrorForLogs(error));
+      }
   };
 }
 

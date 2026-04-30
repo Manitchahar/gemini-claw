@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 
 import type { AssistantEvent } from "../assistant/types.js";
+import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import { GeminiCliError } from "../utils/errors.js";
 import type { GeminiClient, GeminiClientContext } from "./GeminiClient.js";
 
@@ -19,6 +20,7 @@ export interface CliGeminiClientOptions {
   extensions?: string[];
   includeDirectories?: string[];
   settings?: string;
+  logger?: OperatorLogger;
 }
 
 export interface GeminiCliArgsOptions {
@@ -44,7 +46,9 @@ export class CliGeminiClient implements GeminiClient {
       ...this.options,
       model: context.model ?? this.options.model,
       sessionId: context.sessionId,
-      signal: context.signal
+      signal: context.signal,
+      chatId: context.chatId,
+      userId: context.userId
     });
 
     const events =
@@ -61,6 +65,8 @@ export class CliGeminiClient implements GeminiClient {
 interface RunGeminiCliOptions extends CliGeminiClientOptions {
   sessionId?: string;
   signal?: AbortSignal;
+  chatId: string;
+  userId: string;
 }
 
 interface CommandOutput {
@@ -115,6 +121,7 @@ function appendCommaListArg(args: string[], flag: string, values: string[] | und
 
 function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<CommandOutput> {
   const args = buildGeminiCliArgs(prompt, options);
+  const logger = options.logger ?? noopOperatorLogger;
 
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
@@ -134,6 +141,16 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
     let timedOut = false;
     let cancelled = false;
     let killTimer: NodeJS.Timeout | undefined;
+    const startedAt = Date.now();
+
+    logger.info("gemini_start", {
+      chat: options.chatId,
+      user: options.userId,
+      output: options.outputFormat,
+      session: options.sessionId ? "present" : "new",
+      prompt_chars: prompt.length,
+      preview: logger.preview(prompt)
+    });
 
     const finish = (callback: () => void): void => {
       if (settled) return;
@@ -147,6 +164,7 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
     const abort = (): void => {
       cancelled = true;
       if (killTimer) clearTimeout(killTimer);
+      logger.info("gemini_error", { chat: options.chatId, status: "cancel_requested" });
       child.kill("SIGTERM");
       killTimer = setTimeout(() => {
         child.kill("SIGKILL");
@@ -159,6 +177,7 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
     const timer = setTimeout(() => {
       timedOut = true;
       if (killTimer) clearTimeout(killTimer);
+      logger.error("gemini_error", { chat: options.chatId, status: "timeout", timeout_ms: options.timeoutMs });
       child.kill("SIGTERM");
       killTimer = setTimeout(() => {
         child.kill("SIGKILL");
@@ -183,6 +202,7 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
 
     child.on("error", (error) => {
       finish(() => {
+        logger.error("gemini_error", { chat: options.chatId, status: "spawn_failed", error: error.message });
         reject(new GeminiCliError(`Failed to start Gemini CLI command "${options.command}": ${error.message}`));
       });
     });
@@ -195,15 +215,23 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
         }
 
         if (cancelled) {
+          logger.info("gemini_done", { chat: options.chatId, status: "cancelled", duration_ms: Date.now() - startedAt });
           reject(new GeminiCliError("Gemini CLI run was cancelled", { exitCode: code, stderr }));
           return;
         }
 
         if (code !== 0) {
+          logger.error("gemini_error", { chat: options.chatId, status: "non_zero_exit", exit_code: code });
           reject(new GeminiCliError("Gemini CLI exited with a non-zero status", { exitCode: code, stderr }));
           return;
         }
 
+        logger.info("gemini_done", {
+          chat: options.chatId,
+          status: "ok",
+          duration_ms: Date.now() - startedAt,
+          stdout_chars: stdout.length
+        });
         resolve({ stdout, stderr });
       });
     });

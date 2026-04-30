@@ -4,6 +4,7 @@ import type { SessionStore } from "../storage/SessionStore.js";
 import { GeminiCliError } from "../utils/errors.js";
 import type { ChatOperationRunner } from "./chatQueue.js";
 import { buildAssistantPrompt } from "./prompts.js";
+import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import type {
   AssistantEvent,
   AssistantTaskCallbacks,
@@ -26,6 +27,7 @@ export interface AssistantTaskManagerOptions {
   workerSessionMode: WorkerSessionMode;
   extensions: readonly string[];
   sharedChatQueue?: ChatOperationRunner;
+  logger?: OperatorLogger;
 }
 
 interface ManagedTask extends AssistantTaskSummary {
@@ -72,6 +74,15 @@ export class AssistantTaskManager {
 
     this.tasks.set(task.id, task);
     this.queue.push(task);
+    this.logger.info("task_queued", {
+      id: task.id,
+      chat: task.chatId,
+      user: task.userId,
+      queued: this.queue.length,
+      workers: `${this.running.size}/${this.options.maxWorkers}`,
+      chars: task.text.length,
+      preview: this.logger.preview(task.text)
+    });
     this.trimHistory();
     queueMicrotask(() => this.drainQueue());
     return toSummary(task);
@@ -98,6 +109,7 @@ export class AssistantTaskManager {
     if (task.status === "queued") {
       this.removeFromQueue(task.id);
       this.finishTask(task, "cancelled");
+      this.logger.info("task_cancelled", { id: task.id, chat: task.chatId, status: "queued" });
       return toSummary(task);
     }
 
@@ -149,6 +161,15 @@ export class AssistantTaskManager {
     task.status = "running";
     task.startedAt = new Date().toISOString();
     this.running.add(task.id);
+    const startedAt = Date.now();
+
+    this.logger.info("task_running", {
+      id: task.id,
+      chat: task.chatId,
+      workers: `${this.running.size}/${this.options.maxWorkers}`,
+      queued: this.queue.length,
+      session: this.options.workerSessionMode
+    });
 
     const run = async (): Promise<void> => {
       await this.runTaskUnlocked(task);
@@ -162,6 +183,7 @@ export class AssistantTaskManager {
       }
     } finally {
       this.running.delete(task.id);
+      this.logTaskFinished(task, Date.now() - startedAt);
       await notifyTaskComplete(task);
       this.trimHistory();
       this.drainQueue();
@@ -185,6 +207,7 @@ export class AssistantTaskManager {
         signal: task.controller.signal
       })) {
         recordTaskEvent(task, event);
+        this.logTaskEvent(task, event);
         await notifyTaskEvent(task, event);
 
         if (event.type === "content_delta") {
@@ -291,6 +314,37 @@ export class AssistantTaskManager {
     const id = `t-${this.nextId.toString(36).padStart(4, "0")}`;
     this.nextId += 1;
     return id;
+  }
+
+  private get logger(): OperatorLogger {
+    return this.options.logger ?? noopOperatorLogger;
+  }
+
+  private logTaskEvent(task: ManagedTask, event: AssistantEvent): void {
+    if (event.type !== "tool_start" && event.type !== "tool_end") return;
+    this.logger.info(event.type === "tool_start" ? "tool_start" : "tool_end", {
+      id: task.id,
+      chat: task.chatId,
+      name: event.name,
+      success: event.type === "tool_end" ? event.success : undefined
+    });
+    if (event.possibleSubagentName) {
+      this.logger.info("subagent", { id: task.id, chat: task.chatId, name: event.possibleSubagentName });
+    }
+  }
+
+  private logTaskFinished(task: ManagedTask, durationMs: number): void {
+    const event =
+      task.status === "succeeded" ? "task_completed" : task.status === "cancelled" ? "task_cancelled" : "task_failed";
+    this.logger.info(event, {
+      id: task.id,
+      chat: task.chatId,
+      duration_ms: durationMs,
+      chars: task.response?.length,
+      tools: task.tools.length,
+      subagents: task.possibleSubagents.length > 0 ? task.possibleSubagents : "not_observed",
+      error: task.error
+    });
   }
 }
 
