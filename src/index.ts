@@ -7,6 +7,7 @@ import { createTelegramBot } from "./bot/telegramBot.js";
 import { loadConfig } from "./config.js";
 import { CliGeminiClient } from "./gemini/CliGeminiClient.js";
 import { JsonSessionStore } from "./storage/JsonSessionStore.js";
+import { JsonTaskStore } from "./storage/JsonTaskStore.js";
 import { createOperatorLogger } from "./utils/operatorLogger.js";
 
 async function main(): Promise<void> {
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
     approvalMode: config.geminiApprovalMode,
     sandbox: config.geminiSandbox,
     debug: config.geminiDebug,
+    trustWorkspace: config.geminiTrustWorkspace,
     cwd: config.geminiCwd,
     allowedTools: config.geminiAllowedTools,
     allowedMcpServerNames: config.geminiAllowedMcpServerNames,
@@ -35,6 +37,7 @@ async function main(): Promise<void> {
     logger
   });
   const sessionStore = new JsonSessionStore(config.sessionStorePath);
+  const taskStore = new JsonTaskStore(config.taskStorePath);
   const chatQueue = new ChatOperationQueue();
   const taskManager = new AssistantTaskManager(geminiClient, sessionStore, {
     systemInstruction: config.assistantSystemInstruction,
@@ -46,7 +49,8 @@ async function main(): Promise<void> {
     workerSessionMode: config.geminiWorkerSessionMode,
     extensions: config.geminiExtensions,
     sharedChatQueue: chatQueue,
-    logger
+    logger,
+    taskStore
   });
   const assistant = new AssistantService(
     geminiClient,

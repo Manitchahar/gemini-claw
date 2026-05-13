@@ -1,6 +1,7 @@
 import type { GeminiClient } from "../gemini/GeminiClient.js";
 import { createSessionRecord } from "../storage/SessionStore.js";
 import type { SessionStore } from "../storage/SessionStore.js";
+import type { TaskStore } from "../storage/TaskStore.js";
 import { GeminiCliError } from "../utils/errors.js";
 import type { ChatOperationRunner } from "./chatQueue.js";
 import { buildAssistantPrompt } from "./prompts.js";
@@ -28,6 +29,7 @@ export interface AssistantTaskManagerOptions {
   extensions: readonly string[];
   sharedChatQueue?: ChatOperationRunner;
   logger?: OperatorLogger;
+  taskStore?: TaskStore;
 }
 
 interface ManagedTask extends AssistantTaskSummary {
@@ -39,13 +41,16 @@ export class AssistantTaskManager {
   private readonly tasks = new Map<string, ManagedTask>();
   private readonly queue: ManagedTask[] = [];
   private readonly running = new Set<string>();
+  private paused = false;
   private nextId = 1;
 
   constructor(
     private readonly geminiClient: GeminiClient,
     private readonly sessionStore: SessionStore,
     private readonly options: AssistantTaskManagerOptions
-  ) {}
+  ) {
+    this.restorePersistedTasks();
+  }
 
   startTask(request: AssistantTaskRequest, callbacks?: AssistantTaskCallbacks): AssistantTaskSummary {
     if (this.queue.length >= this.options.maxQueuedTasks) {
@@ -84,6 +89,7 @@ export class AssistantTaskManager {
       preview: this.logger.preview(task.text)
     });
     this.trimHistory();
+    this.persistTasks();
     queueMicrotask(() => this.drainQueue());
     return toSummary(task);
   }
@@ -129,8 +135,42 @@ export class AssistantTaskManager {
       maxChatQueuedTasks: this.options.maxChatQueuedTasks,
       running: this.running.size,
       queued: this.queue.length,
-      runningTaskIds: [...this.running]
+      runningTaskIds: [...this.running],
+      paused: this.paused
     };
+  }
+
+  pause(): WorkerStats {
+    this.paused = true;
+    this.persistTasks();
+    return this.getWorkerStats();
+  }
+
+  resume(): WorkerStats {
+    this.paused = false;
+    this.drainQueue();
+    this.persistTasks();
+    return this.getWorkerStats();
+  }
+
+  cancelAll(chatId?: string): AssistantTaskSummary[] {
+    const affected: AssistantTaskSummary[] = [];
+    for (const task of [...this.tasks.values()]) {
+      if (chatId && task.chatId !== chatId) {
+        continue;
+      }
+
+      if (task.status !== "queued" && task.status !== "running") {
+        continue;
+      }
+
+      const cancelled = this.cancelTask(task.chatId, task.id);
+      if (cancelled) {
+        affected.push(cancelled);
+      }
+    }
+    this.persistTasks();
+    return affected;
   }
 
   getSubagentStatus(chatId?: string): SubagentStatus {
@@ -143,6 +183,10 @@ export class AssistantTaskManager {
   }
 
   private drainQueue(): void {
+    if (this.paused) {
+      return;
+    }
+
     for (const task of [...this.queue]) {
       if (this.running.size >= this.options.maxWorkers) {
         return;
@@ -161,6 +205,7 @@ export class AssistantTaskManager {
     task.status = "running";
     task.startedAt = new Date().toISOString();
     this.running.add(task.id);
+    this.persistTasks();
     const startedAt = Date.now();
 
     this.logger.info("task_running", {
@@ -270,6 +315,7 @@ export class AssistantTaskManager {
   private finishTask(task: ManagedTask, status: AssistantTaskStatus): void {
     task.status = status;
     task.finishedAt = new Date().toISOString();
+    this.persistTasks();
   }
 
   private removeFromQueue(taskId: string): void {
@@ -308,6 +354,7 @@ export class AssistantTaskManager {
         this.tasks.delete(task.id);
       }
     }
+    this.persistTasks();
   }
 
   private createTaskId(): string {
@@ -318,6 +365,22 @@ export class AssistantTaskManager {
 
   private get logger(): OperatorLogger {
     return this.options.logger ?? noopOperatorLogger;
+  }
+
+  private restorePersistedTasks(): void {
+    const persisted = this.options.taskStore?.loadTasks() ?? [];
+    for (const summary of persisted) {
+      const restored = restoreTask(summary);
+      this.tasks.set(restored.id, restored);
+      this.nextId = Math.max(this.nextId, parseTaskId(restored.id) + 1);
+    }
+    if (persisted.length > 0) {
+      this.persistTasks();
+    }
+  }
+
+  private persistTasks(): void {
+    this.options.taskStore?.saveTasks([...this.tasks.values()].map(toSummary));
   }
 
   private logTaskEvent(task: ManagedTask, event: AssistantEvent): void {
@@ -399,6 +462,33 @@ function toSummary(task: ManagedTask): AssistantTaskSummary {
     failedTools: [...task.failedTools],
     possibleSubagents: [...task.possibleSubagents]
   };
+}
+
+function restoreTask(summary: AssistantTaskSummary): ManagedTask {
+  if (summary.status === "queued" || summary.status === "running") {
+    return {
+      ...summary,
+      status: "failed",
+      finishedAt: summary.finishedAt ?? new Date().toISOString(),
+      error: summary.error ?? "Task was interrupted before this process started.",
+      controller: new AbortController()
+    };
+  }
+
+  return {
+    ...summary,
+    controller: new AbortController()
+  };
+}
+
+function parseTaskId(taskId: string): number {
+  const match = taskId.match(/^t-([0-9a-z]+)$/i);
+  if (!match) {
+    return 0;
+  }
+
+  const parsed = Number.parseInt(match[1], 36);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function formatTaskError(error: unknown): string {

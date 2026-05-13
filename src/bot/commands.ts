@@ -3,8 +3,10 @@ import type { Bot } from "grammy";
 import type { AssistantService } from "../assistant/assistantService.js";
 import { TaskQueueFullError } from "../assistant/taskManager.js";
 import type { AssistantTaskSummary, SubagentStatus, WorkerStats } from "../assistant/types.js";
+import { GeminiCliError } from "../utils/errors.js";
 import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import { chunkTelegramMessage } from "./messageUtils.js";
+import { createToolProgressReporter } from "./toolProgress.js";
 
 export interface OperatorCommandOptions {
   model?: string;
@@ -30,6 +32,7 @@ export interface OperatorCommandOptions {
 
 export function registerCommands(bot: Bot, assistant: AssistantService, options: OperatorCommandOptions): void {
   const logger = options.logger ?? noopOperatorLogger;
+  const toolProgressIntervalMs = 1_500;
 
   bot.command("start", async (ctx) => {
     logCommand(logger, "start", ctx.chat?.id, ctx.from?.id);
@@ -87,6 +90,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
     }
 
     try {
+      const progress = createToolProgressReporter(ctx, toolProgressIntervalMs);
       const task = assistant.startTask(
         {
           chatId: String(ctx.chat.id),
@@ -94,6 +98,7 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
           text: prompt
         },
         {
+          onEvent: (_summary, event) => progress(event),
           onComplete: async (completed) => {
             await replyWithTaskCompletion(ctx.reply.bind(ctx), completed, options.responseChunkSize);
           }
@@ -158,9 +163,171 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
     await ctx.reply(task.status === "running" ? `Cancellation requested for task ${task.id}.` : `Task ${task.id} is ${task.status}.`);
   });
 
+  bot.command("stop_all", async (ctx) => {
+    if (!ctx.chat) {
+      return;
+    }
+
+    logCommand(logger, "stop_all", ctx.chat.id, ctx.from?.id);
+    const stopped = assistant.stopAllTasks(String(ctx.chat.id));
+    await ctx.reply(`Stop requested for ${stopped.length} queued/running task${stopped.length === 1 ? "" : "s"}.`);
+  });
+
+  bot.command("pause", async (ctx) => {
+    logCommand(logger, "pause", ctx.chat?.id, ctx.from?.id);
+    const stats = assistant.pauseWorkers();
+    await ctx.reply(`Workers paused. Running: ${stats.running}/${stats.maxWorkers}. Queued: ${stats.queued}.`);
+  });
+
+  bot.command("resume", async (ctx) => {
+    logCommand(logger, "resume", ctx.chat?.id, ctx.from?.id);
+    const stats = assistant.resumeWorkers();
+    await ctx.reply(`Workers resumed. Running: ${stats.running}/${stats.maxWorkers}. Queued: ${stats.queued}.`);
+  });
+
   bot.command("workers", async (ctx) => {
     logCommand(logger, "workers", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatWorkersMessage(assistant.getWorkerStats(), options));
+  });
+
+  bot.command("sessions", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot list sessions without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "sessions", ctx.chat.id, ctx.from.id);
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.listGeminiSessions(String(ctx.chat.id), String(ctx.from.id)), options.responseChunkSize);
+  });
+
+  bot.command("delete_session", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot delete a session without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "delete_session", ctx.chat.id, ctx.from.id);
+    const session = extractCommandArgument(ctx.message?.text, "delete_session");
+    if (!session) {
+      await ctx.reply("Usage: /delete_session <id-or-index>");
+      return;
+    }
+
+    await replyWithGeminiCommand(
+      ctx.reply.bind(ctx),
+      assistant.deleteGeminiSession(String(ctx.chat.id), String(ctx.from.id), session),
+      options.responseChunkSize
+    );
+  });
+
+  bot.command("mcp", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot list MCP servers without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "mcp", ctx.chat.id, ctx.from.id);
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.listGeminiMcpServers(String(ctx.chat.id), String(ctx.from.id)), options.responseChunkSize);
+  });
+
+  bot.command("extensions", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot list extensions without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "extensions", ctx.chat.id, ctx.from.id);
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.listGeminiExtensions(String(ctx.chat.id), String(ctx.from.id)), options.responseChunkSize);
+  });
+
+  bot.command("skills", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot list skills without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "skills", ctx.chat.id, ctx.from.id);
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.listGeminiSkills(String(ctx.chat.id), String(ctx.from.id)), options.responseChunkSize);
+  });
+
+  bot.command("skill_link", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot link a skill without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "skill_link", ctx.chat.id, ctx.from.id);
+    const path = extractCommandArgument(ctx.message?.text, "skill_link");
+    if (!path) {
+      await ctx.reply("Usage: /skill_link <local-path>");
+      return;
+    }
+
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.linkGeminiSkill(String(ctx.chat.id), String(ctx.from.id), path), options.responseChunkSize);
+  });
+
+  bot.command("skill_install", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot install a skill without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "skill_install", ctx.chat.id, ctx.from.id);
+    const source = extractCommandArgument(ctx.message?.text, "skill_install");
+    if (!source) {
+      await ctx.reply("Usage: /skill_install <git-url-or-local-path>");
+      return;
+    }
+
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.installGeminiSkill(String(ctx.chat.id), String(ctx.from.id), source), options.responseChunkSize);
+  });
+
+  bot.command("skill_enable", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot enable a skill without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "skill_enable", ctx.chat.id, ctx.from.id);
+    const name = extractCommandArgument(ctx.message?.text, "skill_enable");
+    if (!name) {
+      await ctx.reply("Usage: /skill_enable <name>");
+      return;
+    }
+
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.enableGeminiSkill(String(ctx.chat.id), String(ctx.from.id), name), options.responseChunkSize);
+  });
+
+  bot.command("skill_disable", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot disable a skill without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "skill_disable", ctx.chat.id, ctx.from.id);
+    const name = extractCommandArgument(ctx.message?.text, "skill_disable");
+    if (!name) {
+      await ctx.reply("Usage: /skill_disable <name>");
+      return;
+    }
+
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.disableGeminiSkill(String(ctx.chat.id), String(ctx.from.id), name), options.responseChunkSize);
+  });
+
+  bot.command("skill_uninstall", async (ctx) => {
+    if (!ctx.chat || !ctx.from) {
+      await ctx.reply("Cannot uninstall a skill without a private chat and user.");
+      return;
+    }
+
+    logCommand(logger, "skill_uninstall", ctx.chat.id, ctx.from.id);
+    const name = extractCommandArgument(ctx.message?.text, "skill_uninstall");
+    if (!name) {
+      await ctx.reply("Usage: /skill_uninstall <name>");
+      return;
+    }
+
+    await replyWithGeminiCommand(ctx.reply.bind(ctx), assistant.uninstallGeminiSkill(String(ctx.chat.id), String(ctx.from.id), name), options.responseChunkSize);
   });
 
   bot.command("subagents", async (ctx) => {
@@ -183,7 +350,20 @@ export function formatHelpMessage(): string {
     "/tasks - list running and recent tasks.",
     "/task_status <id> - show one task's status.",
     "/cancel <id> - cancel a queued or running task.",
+    "/stop_all - cancel this chat's queued and running tasks.",
+    "/pause - pause starting new background workers.",
+    "/resume - resume background workers.",
     "/workers - show worker capacity.",
+    "/sessions - list Gemini CLI sessions for the current project.",
+    "/delete_session <id-or-index> - delete a Gemini CLI session.",
+    "/mcp - list configured Gemini CLI MCP servers.",
+    "/extensions - list installed Gemini CLI extensions.",
+    "/skills - list discovered Gemini CLI skills.",
+    "/skill_link <local-path> - link a local Gemini CLI skill.",
+    "/skill_install <git-url-or-local-path> - install a Gemini CLI skill.",
+    "/skill_enable <name> - enable a Gemini CLI skill.",
+    "/skill_disable <name> - disable a Gemini CLI skill.",
+    "/skill_uninstall <name> - uninstall a Gemini CLI skill.",
     "/subagents - show configured and observed subagent state.",
     "For safety, this bot only responds to allowlisted Telegram users."
   ].join("\n");
@@ -267,6 +447,7 @@ export function formatWorkersMessage(stats: WorkerStats, options: OperatorComman
     `Per-chat limit: ${stats.maxChatWorkers}`,
     `Per-chat queue limit: ${stats.maxChatQueuedTasks}`,
     `Session mode: ${options.workerSessionMode}`,
+    `Paused: ${formatEnabled(stats.paused)}`,
     `History limit: ${options.taskHistoryLimit}`,
     `Running task IDs: ${formatList(stats.runningTaskIds, "none")}`
   ].join("\n");
@@ -299,6 +480,42 @@ async function replyWithTaskCompletion(
   }
 
   await reply(`Task ${task.id} ${task.status}${task.error ? `: ${task.error}` : "."}`);
+}
+
+async function replyWithChunks(
+  reply: (text: string) => Promise<unknown>,
+  text: string,
+  chunkSize: number
+): Promise<void> {
+  for (const chunk of chunkTelegramMessage(text, chunkSize)) {
+    await reply(chunk);
+  }
+}
+
+async function replyWithGeminiCommand(
+  reply: (text: string) => Promise<unknown>,
+  output: Promise<string>,
+  chunkSize: number
+): Promise<void> {
+  try {
+    await replyWithChunks(reply, await output, chunkSize);
+  } catch (error) {
+    await reply(formatGeminiCommandError(error));
+  }
+}
+
+function formatGeminiCommandError(error: unknown): string {
+  if (error instanceof GeminiCliError) {
+    const stderr = error.details?.stderr;
+    const hint = typeof stderr === "string" && stderr.trim() ? `\n\nDetails:\n${preview(stderr, 800)}` : "";
+    return `Gemini CLI command failed: ${error.message}${hint}`;
+  }
+
+  if (error instanceof Error) {
+    return `Gemini CLI command failed: ${error.message}`;
+  }
+
+  return `Gemini CLI command failed: ${String(error)}`;
 }
 
 function extractCommandArgument(text: string | undefined, command: string): string {

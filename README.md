@@ -35,9 +35,11 @@ Gemini Claw turns a Telegram bot into a private operator interface for the offic
    TELEGRAM_BOT_TOKEN=...
    TELEGRAM_ALLOWED_USER_IDS=123456789
    GEMINI_CLI_COMMAND=gemini
+   GEMINI_OUTPUT_FORMAT=stream-json
    GEMINI_APPROVAL_MODE=default
    GEMINI_SANDBOX=false
    GEMINI_DEBUG=false
+   GEMINI_TRUST_WORKSPACE=true
    GEMINI_CWD=.
    GEMINI_ALLOWED_TOOLS=
    GEMINI_ALLOWED_MCP_SERVER_NAMES=
@@ -54,6 +56,8 @@ Gemini Claw turns a Telegram bot into a private operator interface for the offic
    OPERATOR_LOG_LEVEL=info
    OPERATOR_LOG_CONTENT=false
    OPERATOR_LOG_PREVIEW_CHARS=120
+   SESSION_STORE_PATH=.data/sessions.json
+   TASK_STORE_PATH=.data/tasks.json
    ```
 
    `TELEGRAM_ALLOWED_USER_IDS` is a comma-separated list. Messages from any other Telegram user are rejected before Gemini is invoked. This allowlist is mandatory, but it is not a complete safety boundary: a compromised Telegram account or a prompt-injection attack can still issue harmful instructions through an otherwise trusted chat.
@@ -73,17 +77,17 @@ For privacy, the bot only responds in direct Telegram chats. Even allowlisted us
 The bot prints a live operator feed so the terminal shows what the Telegram assistant is doing: startup status, incoming chats, Gemini CLI subprocesses, tool/subagent observations, background task lifecycle, worker counts, cancellations, and completions.
 
 ```text
-╭─ Gemini Claw online ─────────────────────────────╮
-│ bot=@RockyOperator_bot  mode=YOLO    workers=0/3 │
-│ model=gemini-default   sessions=isolated ext=2   │
-╰──────────────────────────────────────────────────╯
-09:21:05  📨 chat request      chat=123 chars=42 preview="inspect the repo…"
-09:21:05  🧠 gemini start      chat=123 output=stream-json session=present
-09:21:07  🔧 tool start        chat=123 name=ReadFile
-09:21:12  📤 chat reply        chat=123 chars=1800 duration_ms=7200
-09:22:10  🚀 task queued       id=t-0001 workers=0/3 preview="write README…"
-09:22:18  🤖 subagent          id=t-0001 name=research-agent
-09:22:31  ✅ task completed    id=t-0001 tools=3 chars=2500
++---------------- Gemini Claw online ----------------+
+| bot=@RockyOperator_bot  mode=YOLO    workers=0/3   |
+| model=gemini-default    sessions=isolated ext=2    |
++-----------------------------------------------------+
+09:21:05  chat request      chat=123 chars=42 preview="inspect the repo..."
+09:21:05  gemini start      chat=123 output=stream-json session=present
+09:21:07  tool start        chat=123 name=ReadFile
+09:21:12  chat reply        chat=123 chars=1800 duration_ms=7200
+09:22:10  task queued       id=t-0001 workers=0/3 preview="write README..."
+09:22:18  subagent          id=t-0001 name=research-agent
+09:22:31  task completed    id=t-0001 tools=3 chars=2500
 ```
 
 Operator logging settings:
@@ -109,14 +113,29 @@ The default is screen-recording safe: short previews and metadata only. Set `OPE
 - `/tasks` - lists running and recent tasks for this Telegram chat
 - `/task_status <id>` - shows task status, result preview, tools, and observed subagents
 - `/cancel <id>` - cancels a queued task or terminates a running Gemini CLI worker
+- `/stop_all` - cancels this chat's queued and running background tasks
+- `/pause` - pauses starting new background workers
+- `/resume` - resumes background workers
 - `/workers` - shows worker limits, running count, queued count, and active task IDs
+- `/sessions` - lists Gemini CLI sessions
+- `/delete_session <id-or-index>` - deletes a Gemini CLI session
+- `/mcp` - lists configured Gemini CLI MCP servers
+- `/extensions` - lists installed Gemini CLI extensions
+- `/skills` - lists discovered Gemini CLI skills
+- `/skill_link <local-path>` - links a local Gemini CLI skill
+- `/skill_install <git-url-or-local-path>` - installs a Gemini CLI skill
+- `/skill_enable <name>` - enables a Gemini CLI skill
+- `/skill_disable <name>` - disables a Gemini CLI skill
+- `/skill_uninstall <name>` - uninstalls a Gemini CLI skill
 - `/subagents` - explains SDK support and shows configured/observed subagent state
 
 Plain text chat remains sequential so the normal Gemini CLI session mapping stays safe. Use `/task` when you want multiple independent jobs to run at once.
 
+Images, audio, voice notes, videos, stickers, locations, contacts, polls, and document uploads are not model inputs yet. The bot detects those formats and replies with a clear unsupported-format message. For now, paste text or provide a local file path that Gemini CLI can read.
+
 ## Background workers
 
-Each `/task` starts a task record and returns immediately with an ID such as `t-0001`. When capacity is available, the task manager starts a separate `gemini` subprocess for that worker. Completed task summaries stay in memory for `/tasks` and `/task_status`.
+Each `/task` starts a task record and returns immediately with an ID such as `t-0001`. When capacity is available, the task manager starts a separate `gemini` subprocess for that worker. Task summaries are persisted to `TASK_STORE_PATH` for `/tasks` and `/task_status`; queued or running tasks from a previous process are marked interrupted on startup.
 
 Worker settings:
 
@@ -140,10 +159,10 @@ Cancellation is best-effort. `/cancel <id>` can stop a queued task or send termi
 The app invokes:
 
 ```bash
-gemini --prompt "<assistant prompt>" --output-format json --yolo
+gemini --prompt "<assistant prompt>" --output-format stream-json --yolo
 ```
 
-The app always adds `--yolo` to Gemini CLI invocations. When a Gemini session ID is returned, later messages resume it with `--resume <session_id>`. Set `GEMINI_OUTPUT_FORMAT=stream-json` to parse Gemini CLI JSONL events. The adapter is isolated behind `GeminiClient`; the CLI subprocess remains the default because it uses the published `@google/gemini-cli`, while `SdkGeminiClient` is intentionally kept only as a future adapter seam until a stable first-party SDK package is available.
+The app always adds `--yolo` to Gemini CLI invocations. When a Gemini session ID is returned, later messages resume it with `--resume <session_id>`. `GEMINI_OUTPUT_FORMAT=stream-json` is the default so tool and content events can be parsed while the subprocess is still running; `json` remains available for final-response-only automation. The adapter is isolated behind `GeminiClient`; the CLI subprocess remains the default because it uses the published `@google/gemini-cli`, while `SdkGeminiClient` is intentionally kept only as a future adapter seam until a stable first-party SDK package is available.
 
 ## Subagents and extensions
 

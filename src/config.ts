@@ -10,12 +10,13 @@ const envSchema = z.object({
     .trim()
     .min(1, "TELEGRAM_ALLOWED_USER_IDS must include at least one Telegram user ID"),
   GEMINI_CLI_COMMAND: z.string().trim().min(1).default("gemini"),
-  GEMINI_OUTPUT_FORMAT: z.enum(["json", "stream-json"]).default("json"),
+  GEMINI_OUTPUT_FORMAT: z.enum(["json", "stream-json"]).default("stream-json"),
   GEMINI_MODEL: z.string().trim().optional(),
   GEMINI_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   GEMINI_APPROVAL_MODE: z.string().trim().optional(),
   GEMINI_SANDBOX: z.string().optional(),
   GEMINI_DEBUG: z.string().optional(),
+  GEMINI_TRUST_WORKSPACE: z.string().optional(),
   GEMINI_CWD: z.string().trim().optional(),
   GEMINI_ALLOWED_TOOLS: z.string().optional(),
   GEMINI_ALLOWED_MCP_SERVER_NAMES: z.string().optional(),
@@ -33,6 +34,7 @@ const envSchema = z.object({
   OPERATOR_LOG_CONTENT: z.string().optional(),
   OPERATOR_LOG_PREVIEW_CHARS: z.coerce.number().int().positive().default(120),
   SESSION_STORE_PATH: z.string().trim().min(1).default(".data/sessions.json"),
+  TASK_STORE_PATH: z.string().trim().min(1).default(".data/tasks.json"),
   TELEGRAM_RESPONSE_CHUNK_SIZE: z.coerce.number().int().min(500).max(4096).default(3900),
   ASSISTANT_SYSTEM_INSTRUCTION: z.string().trim().optional()
 });
@@ -53,6 +55,7 @@ export interface AppConfig {
   geminiApprovalMode?: string;
   geminiSandbox: boolean;
   geminiDebug: boolean;
+  geminiTrustWorkspace: boolean;
   geminiCwd?: string;
   geminiAllowedTools: string[];
   geminiAllowedMcpServerNames: string[];
@@ -70,6 +73,7 @@ export interface AppConfig {
   operatorLogContent: boolean;
   operatorLogPreviewChars: number;
   sessionStorePath: string;
+  taskStorePath: string;
   telegramResponseChunkSize: number;
   assistantSystemInstruction: string;
 }
@@ -146,6 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     geminiApprovalMode: data.GEMINI_APPROVAL_MODE || undefined,
     geminiSandbox: parseBooleanConfig(data.GEMINI_SANDBOX, "GEMINI_SANDBOX"),
     geminiDebug: parseBooleanConfig(data.GEMINI_DEBUG, "GEMINI_DEBUG"),
+    geminiTrustWorkspace: parseBooleanConfig(data.GEMINI_TRUST_WORKSPACE, "GEMINI_TRUST_WORKSPACE", true),
     geminiCwd: data.GEMINI_CWD || undefined,
     geminiAllowedTools: parseCommaSeparatedList(data.GEMINI_ALLOWED_TOOLS),
     geminiAllowedMcpServerNames: parseCommaSeparatedList(data.GEMINI_ALLOWED_MCP_SERVER_NAMES),
@@ -163,6 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     operatorLogContent: parseBooleanConfig(data.OPERATOR_LOG_CONTENT, "OPERATOR_LOG_CONTENT"),
     operatorLogPreviewChars: data.OPERATOR_LOG_PREVIEW_CHARS,
     sessionStorePath: data.SESSION_STORE_PATH,
+    taskStorePath: data.TASK_STORE_PATH,
     telegramResponseChunkSize: data.TELEGRAM_RESPONSE_CHUNK_SIZE,
     assistantSystemInstruction: data.ASSISTANT_SYSTEM_INSTRUCTION || DEFAULT_SYSTEM_INSTRUCTION
   };

@@ -19,13 +19,14 @@ describe("config", () => {
     });
 
     expect(config.geminiCliCommand).toBe("gemini");
-    expect(config.geminiOutputFormat).toBe("json");
+    expect(config.geminiOutputFormat).toBe("stream-json");
     expect(config.geminiTimeoutMs).toBe(120_000);
     expect(config.telegramAllowedUserIds.has("123")).toBe(true);
     expect(config.geminiYolo).toBe(true);
     expect(config.geminiApprovalMode).toBeUndefined();
     expect(config.geminiSandbox).toBe(false);
     expect(config.geminiDebug).toBe(false);
+    expect(config.geminiTrustWorkspace).toBe(true);
     expect(config.geminiCwd).toBeUndefined();
     expect(config.geminiAllowedTools).toEqual([]);
     expect(config.geminiAllowedMcpServerNames).toEqual([]);
@@ -42,6 +43,7 @@ describe("config", () => {
     expect(config.operatorLogLevel).toBe("info");
     expect(config.operatorLogContent).toBe(false);
     expect(config.operatorLogPreviewChars).toBe(120);
+    expect(config.taskStorePath).toBe(".data/tasks.json");
   });
 
   it.each(["true", "1", "yes", "on", " TRUE "])("parses %s as true", (value) => {
@@ -82,6 +84,7 @@ describe("config", () => {
       GEMINI_APPROVAL_MODE: "auto_edit",
       GEMINI_SANDBOX: "on",
       GEMINI_DEBUG: "1",
+      GEMINI_TRUST_WORKSPACE: "false",
       GEMINI_CWD: " /workspace/project ",
       GEMINI_ALLOWED_TOOLS: "read_file, run_shell, ,write_file",
       GEMINI_ALLOWED_MCP_SERVER_NAMES: "github, filesystem",
@@ -104,6 +107,7 @@ describe("config", () => {
     expect(config.geminiApprovalMode).toBe("auto_edit");
     expect(config.geminiSandbox).toBe(true);
     expect(config.geminiDebug).toBe(true);
+    expect(config.geminiTrustWorkspace).toBe(false);
     expect(config.geminiCwd).toBe("/workspace/project");
     expect(config.geminiAllowedTools).toEqual(["read_file", "run_shell", "write_file"]);
     expect(config.geminiAllowedMcpServerNames).toEqual(["github", "filesystem"]);

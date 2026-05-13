@@ -74,6 +74,7 @@ export interface WorkerStats {
   running: number;
   queued: number;
   runningTaskIds: string[];
+  paused: boolean;
 }
 
 export interface SubagentStatus {

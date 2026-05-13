@@ -57,7 +57,20 @@ describe("registerCommands", () => {
       "tasks",
       "task_status",
       "cancel",
+      "stop_all",
+      "pause",
+      "resume",
       "workers",
+      "sessions",
+      "delete_session",
+      "mcp",
+      "extensions",
+      "skills",
+      "skill_link",
+      "skill_install",
+      "skill_enable",
+      "skill_disable",
+      "skill_uninstall",
       "subagents"
     ]);
   });
@@ -72,6 +85,16 @@ describe("registerCommands", () => {
     expect(reply).toContain("/tools");
     expect(reply).toContain("/plan");
     expect(reply).toContain("/task <prompt>");
+    expect(reply).toContain("/stop_all");
+    expect(reply).toContain("/sessions");
+    expect(reply).toContain("/mcp");
+    expect(reply).toContain("/extensions");
+    expect(reply).toContain("/skills");
+    expect(reply).toContain("/skill_link");
+    expect(reply).toContain("/skill_install");
+    expect(reply).toContain("/skill_enable");
+    expect(reply).toContain("/skill_disable");
+    expect(reply).toContain("/skill_uninstall");
     expect(reply).toContain("/workers");
     expect(reply).toContain("/subagents");
     expect(reply).toContain("allowlisted Telegram users");
@@ -146,7 +169,9 @@ describe("registerCommands", () => {
   });
 
   it("shows worker and subagent status", async () => {
-    expect(await runCommand("workers")).toContain("Running: 1/3");
+    const workers = await runCommand("workers");
+    expect(workers).toContain("Running: 1/3");
+    expect(workers).toContain("Paused: disabled");
     const subagents = await runCommand("subagents");
     expect(subagents).toContain("SDK default: not available.");
     expect(subagents).toContain("Observed subagents: research-agent");
@@ -172,6 +197,65 @@ describe("registerCommands", () => {
     await handler({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/cancel t-0001" }, reply });
 
     expect(reply).toHaveBeenCalledWith("Cancellation requested for task t-0001.");
+  });
+
+  it("exposes Gemini CLI management commands", async () => {
+    const { bot, assistant } = registerTestCommands();
+    const reply = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+
+    await bot.commands.get("sessions")?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/sessions" }, reply });
+    await bot.commands.get("mcp")?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/mcp" }, reply });
+    await bot.commands.get("extensions")?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/extensions" }, reply });
+    await bot.commands.get("skills")?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/skills" }, reply });
+    await bot.commands
+      .get("delete_session")
+      ?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/delete_session 3" }, reply });
+
+    expect(assistant.listGeminiSessions).toHaveBeenCalledWith("123", "456");
+    expect(assistant.listGeminiMcpServers).toHaveBeenCalledWith("123", "456");
+    expect(assistant.listGeminiExtensions).toHaveBeenCalledWith("123", "456");
+    expect(assistant.listGeminiSkills).toHaveBeenCalledWith("123", "456");
+    expect(assistant.deleteGeminiSession).toHaveBeenCalledWith("123", "456", "3");
+  });
+
+  it("exposes Gemini CLI skill management commands", async () => {
+    const { bot, assistant } = registerTestCommands();
+    const reply = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+
+    await bot.commands
+      .get("skill_link")
+      ?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/skill_link .data/skill" }, reply });
+    await bot.commands
+      .get("skill_install")
+      ?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/skill_install https://example.com/skill.git" }, reply });
+    await bot.commands
+      .get("skill_enable")
+      ?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/skill_enable test-skill" }, reply });
+    await bot.commands
+      .get("skill_disable")
+      ?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/skill_disable test-skill" }, reply });
+    await bot.commands
+      .get("skill_uninstall")
+      ?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/skill_uninstall test-skill" }, reply });
+
+    expect(assistant.linkGeminiSkill).toHaveBeenCalledWith("123", "456", ".data/skill");
+    expect(assistant.installGeminiSkill).toHaveBeenCalledWith("123", "456", "https://example.com/skill.git");
+    expect(assistant.enableGeminiSkill).toHaveBeenCalledWith("123", "456", "test-skill");
+    expect(assistant.disableGeminiSkill).toHaveBeenCalledWith("123", "456", "test-skill");
+    expect(assistant.uninstallGeminiSkill).toHaveBeenCalledWith("123", "456", "test-skill");
+  });
+
+  it("supports panic controls", async () => {
+    const { bot, assistant } = registerTestCommands();
+    const reply = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+
+    await bot.commands.get("pause")?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/pause" }, reply });
+    await bot.commands.get("resume")?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/resume" }, reply });
+    await bot.commands.get("stop_all")?.({ chat: { id: 123 }, from: { id: 456 }, message: { text: "/stop_all" }, reply });
+
+    expect(assistant.pauseWorkers).toHaveBeenCalled();
+    expect(assistant.resumeWorkers).toHaveBeenCalled();
+    expect(assistant.stopAllTasks).toHaveBeenCalledWith("123");
   });
 });
 
@@ -226,13 +310,57 @@ function registerTestCommands(commandOptions: OperatorCommandOptions = options):
       maxChatQueuedTasks: 10,
       running: 1,
       queued: 0,
-      runningTaskIds: ["t-0001"]
+      runningTaskIds: ["t-0001"],
+      paused: false
     }),
     getSubagentStatus: vi.fn().mockReturnValue({
       extensionsConfigured: true,
       configuredExtensions: ["ext-a"],
       observedSubagents: ["research-agent"]
-    })
+    }),
+    pauseWorkers: vi.fn().mockReturnValue({
+      maxWorkers: 3,
+      maxChatWorkers: 2,
+      maxQueuedTasks: 50,
+      maxChatQueuedTasks: 10,
+      running: 1,
+      queued: 0,
+      runningTaskIds: ["t-0001"],
+      paused: true
+    }),
+    resumeWorkers: vi.fn().mockReturnValue({
+      maxWorkers: 3,
+      maxChatWorkers: 2,
+      maxQueuedTasks: 50,
+      maxChatQueuedTasks: 10,
+      running: 1,
+      queued: 0,
+      runningTaskIds: ["t-0001"],
+      paused: false
+    }),
+    stopAllTasks: vi.fn().mockReturnValue([
+      {
+        id: "t-0001",
+        chatId: "123",
+        userId: "456",
+        text: "inspect repo",
+        status: "running",
+        createdAt: "now",
+        tools: [],
+        failedTools: [],
+        possibleSubagents: []
+      }
+    ]),
+    listGeminiSessions: vi.fn().mockResolvedValue("sessions"),
+    deleteGeminiSession: vi.fn().mockResolvedValue("deleted"),
+    listGeminiMcpServers: vi.fn().mockResolvedValue("mcp"),
+    listGeminiExtensions: vi.fn().mockResolvedValue("extensions"),
+    listGeminiSkills: vi.fn().mockResolvedValue("skills"),
+    linkGeminiSkill: vi.fn().mockResolvedValue("linked"),
+    installGeminiSkill: vi.fn().mockResolvedValue("installed"),
+    enableGeminiSkill: vi.fn().mockResolvedValue("enabled"),
+    disableGeminiSkill: vi.fn().mockResolvedValue("disabled"),
+    uninstallGeminiSkill: vi.fn().mockResolvedValue("uninstalled")
   };
 
   registerCommands(bot as unknown as Bot, assistant as unknown as AssistantService, commandOptions);

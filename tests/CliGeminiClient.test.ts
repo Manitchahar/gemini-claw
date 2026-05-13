@@ -39,6 +39,27 @@ function mockGeminiCli(stdout: string): void {
   }) as never);
 }
 
+function mockStreamingGeminiCli(): EventEmitter & {
+  stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+  kill: ReturnType<typeof vi.fn>;
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+    kill: ReturnType<typeof vi.fn>;
+  };
+
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  child.stdin = { write: vi.fn(), end: vi.fn() };
+  child.kill = vi.fn();
+  spawnMock.mockImplementationOnce((() => child) as never);
+  return child;
+}
+
 async function collectEvents(client: CliGeminiClient): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of client.sendMessage("hello", { chatId: "1", userId: "2" })) {
@@ -309,8 +330,6 @@ describe("buildGeminiCliArgs", () => {
       "--resume",
       "session-1",
       "--yolo",
-      "--approval-mode",
-      "yolo",
       "--sandbox",
       "--debug",
       "--allowed-tools",
@@ -383,6 +402,107 @@ describe("CliGeminiClient", () => {
       "gemini_done",
       expect.objectContaining({ chat: "1", status: "ok", stdout_chars: JSON.stringify({ response: "done" }).length })
     );
+  });
+
+  it("yields stream-json events before the subprocess closes", async () => {
+    const child = mockStreamingGeminiCli();
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "stream-json",
+      timeoutMs: 1_000
+    });
+    const iterator = client.sendMessage("hello", { chatId: "1", userId: "2" })[Symbol.asyncIterator]();
+
+    const first = iterator.next();
+    child.stdout.emit("data", `${JSON.stringify({ type: "message", role: "assistant", text: "Hello" })}\n`);
+
+    await expect(first).resolves.toEqual({ done: false, value: { type: "content_delta", text: "Hello" } });
+
+    const second = iterator.next();
+    child.stdout.emit("data", `${JSON.stringify({ type: "result", session_id: "session-1" })}\n`);
+    child.emit("close", 0);
+
+    await expect(second).resolves.toEqual({
+      done: false,
+      value: { type: "stats", sessionId: "session-1", raw: { type: "result", session_id: "session-1" } }
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  it("runs Gemini CLI management commands", async () => {
+    const child = mockStreamingGeminiCli();
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "json",
+      timeoutMs: 1_000
+    });
+    const output = client.runCliCommand(["mcp", "list"], { chatId: "1", userId: "2" });
+
+    child.stdout.emit("data", "servers");
+    child.emit("close", 0);
+
+    await expect(output).resolves.toBe("servers");
+    expect(spawnMock).toHaveBeenCalledWith(
+      "gemini",
+      ["mcp", "list"],
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] })
+    );
+  });
+
+  it("combines management command stdout and stderr because Gemini may split prompts and results", async () => {
+    const child = mockStreamingGeminiCli();
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "json",
+      timeoutMs: 1_000
+    });
+    const output = client.runCliCommand(["skills", "link", "local-skill"], { chatId: "1", userId: "2" });
+
+    child.stdout.emit("data", "Do you want to continue? [Y/n]:");
+    child.stderr.emit("data", "Successfully linked skills.");
+    child.emit("close", 0);
+
+    await expect(output).resolves.toBe("Do you want to continue? [Y/n]:\nSuccessfully linked skills.");
+  });
+
+  it("auto-confirms native mutating skill management commands", async () => {
+    const child = mockStreamingGeminiCli();
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "json",
+      timeoutMs: 1_000
+    });
+    const output = client.runCliCommand(["skills", "link", "local-skill"], { chatId: "1", userId: "2" });
+
+    child.stdout.emit("data", "linked");
+    child.emit("close", 0);
+
+    await expect(output).resolves.toBe("linked");
+    expect(spawnMock).toHaveBeenCalledWith(
+      "gemini",
+      ["skills", "link", "local-skill"],
+      expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"] })
+    );
+    expect(child.stdin.write).toHaveBeenCalledWith("y\n");
+    expect(child.stdin.end).toHaveBeenCalled();
+  });
+
+  it("caps Gemini CLI management command timeouts", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const child = mockStreamingGeminiCli();
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "json",
+      timeoutMs: 120_000
+    });
+
+    const output = client.runCliCommand(["skills", "link", "local-skill"], { chatId: "1", userId: "2" });
+    child.stdout.emit("data", "linked");
+    child.emit("close", 0);
+
+    await expect(output).resolves.toBe("linked");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+    setTimeoutSpy.mockRestore();
   });
 });
 

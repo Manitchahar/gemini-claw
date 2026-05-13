@@ -11,4 +11,5 @@ export interface GeminiClientContext {
 export interface GeminiClient {
   sendMessage(input: string, context: GeminiClientContext): AsyncIterable<AssistantEvent>;
   resetSession?(chatId: string): Promise<void>;
+  runCliCommand?(args: string[], context?: { chatId?: string; userId?: string }): Promise<string>;
 }

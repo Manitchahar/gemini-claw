@@ -1,10 +1,10 @@
 import type { Context } from "grammy";
 
 import type { AssistantService } from "../assistant/assistantService.js";
-import type { AssistantEvent } from "../assistant/types.js";
 import { GeminiCliError } from "../utils/errors.js";
 import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import { chunkTelegramMessage } from "./messageUtils.js";
+import { createToolProgressReporter } from "./toolProgress.js";
 
 const DEFAULT_TYPING_ACTION_INTERVAL_MS = 4_000;
 const DEFAULT_TOOL_PROGRESS_INTERVAL_MS = 1_500;
@@ -67,55 +67,53 @@ export function createTextMessageHandler(options: MessageHandlerOptions) {
   };
 }
 
-function createToolProgressReporter(ctx: Context, intervalMs: number): (event: AssistantEvent) => Promise<void> {
-  let lastSentAt = Number.NEGATIVE_INFINITY;
-  let lastProgressKey = "";
-
-  return async (event: AssistantEvent): Promise<void> => {
-    if (event.type !== "tool_start" && event.type !== "tool_end") {
-      return;
-    }
-
-    const text = formatToolProgress(event);
-    if (!text) {
-      return;
-    }
-
-    const key = event.type === "tool_end" ? `${event.type}:${event.name}:${event.success}` : `${event.type}:${event.name}`;
-    const now = Date.now();
-    const isCompletingLastStartedTool = event.type === "tool_end" && lastProgressKey === `tool_start:${event.name}`;
-    if (key === lastProgressKey || (!isCompletingLastStartedTool && now - lastSentAt < intervalMs)) {
-      return;
-    }
-
-    lastProgressKey = key;
-    lastSentAt = now;
-
-    try {
-        await ctx.reply(text);
-      } catch (error) {
-        console.error(formatErrorForLogs(error));
-      }
+export function createUnsupportedMessageHandler() {
+  return async (ctx: Context): Promise<void> => {
+    const kind = detectUnsupportedMessageKind(ctx);
+    await ctx.reply(
+      [
+        `${kind} input is not supported yet.`,
+        "For now, send text prompts only. If this is a file or media item, paste the relevant text or a local file path that Gemini CLI can read."
+      ].join("\n")
+    );
   };
 }
 
-function formatToolProgress(event: AssistantEvent): string | undefined {
-  if (event.type === "tool_start") {
-    return `🔧 ${sanitizeToolName(event.name)} started.`;
+function detectUnsupportedMessageKind(ctx: Context): string {
+  const message = ctx.message as
+    | {
+        photo?: unknown;
+        voice?: unknown;
+        audio?: unknown;
+        video?: unknown;
+        video_note?: unknown;
+        document?: unknown;
+        animation?: unknown;
+        sticker?: unknown;
+        location?: unknown;
+        contact?: unknown;
+        poll?: unknown;
+        caption?: string;
+      }
+    | undefined;
+
+  if (!message) {
+    return "This message";
   }
 
-  if (event.type === "tool_end") {
-    const status = event.success ? "finished" : "failed";
-    const icon = event.success ? "✅" : "⚠️";
-    return `${icon} ${sanitizeToolName(event.name)} ${status}.`;
-  }
+  if (message.photo) return message.caption ? "Photo with caption" : "Photo";
+  if (message.voice) return "Voice message";
+  if (message.audio) return "Audio";
+  if (message.video) return "Video";
+  if (message.video_note) return "Video note";
+  if (message.document) return "Document";
+  if (message.animation) return "Animation";
+  if (message.sticker) return "Sticker";
+  if (message.location) return "Location";
+  if (message.contact) return "Contact";
+  if (message.poll) return "Poll";
 
-  return undefined;
-}
-
-function sanitizeToolName(name: string): string {
-  const normalized = name.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-  return normalized.slice(0, 80) || "Tool";
+  return "This message type";
 }
 
 function startTypingIndicator(ctx: Context, intervalMs: number): () => void {

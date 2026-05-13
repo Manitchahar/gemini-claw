@@ -5,7 +5,7 @@ import type { AppConfig } from "../config.js";
 import type { OperatorLogger } from "../utils/operatorLogger.js";
 import { requireAllowedUser } from "./auth.js";
 import { registerCommands } from "./commands.js";
-import { createTextMessageHandler } from "./messageHandler.js";
+import { createTextMessageHandler, createUnsupportedMessageHandler } from "./messageHandler.js";
 
 export function createTelegramBot(config: AppConfig, assistant: AssistantService, logger?: OperatorLogger): Bot {
   const bot = new Bot(config.telegramBotToken);
@@ -45,9 +45,7 @@ export function createTelegramBot(config: AppConfig, assistant: AssistantService
     })
   );
 
-  bot.on("message", async (ctx) => {
-    await ctx.reply("Please send a text message.");
-  });
+  bot.on("message", createUnsupportedMessageHandler());
 
   bot.catch((error) => {
     const ctx = error.ctx;

@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import type { AssistantEvent } from "../assistant/types.js";
 import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import { GeminiCliError } from "../utils/errors.js";
 import type { GeminiClient, GeminiClientContext } from "./GeminiClient.js";
+
+const MANAGEMENT_COMMAND_TIMEOUT_MS = 30_000;
 
 export interface CliGeminiClientOptions {
   command: string;
@@ -14,6 +18,7 @@ export interface CliGeminiClientOptions {
   approvalMode?: string;
   sandbox?: boolean;
   debug?: boolean;
+  trustWorkspace?: boolean;
   cwd?: string;
   allowedTools?: string[];
   allowedMcpServerNames?: string[];
@@ -42,23 +47,43 @@ export class CliGeminiClient implements GeminiClient {
   constructor(private readonly options: CliGeminiClientOptions) {}
 
   async *sendMessage(input: string, context: GeminiClientContext): AsyncIterable<AssistantEvent> {
-    const output = await runGeminiCli(input, {
+    const runOptions = {
       ...this.options,
       model: context.model ?? this.options.model,
       sessionId: context.sessionId,
       signal: context.signal,
       chatId: context.chatId,
       userId: context.userId
+    };
+
+    if (this.options.outputFormat === "stream-json") {
+      yield* streamGeminiCliEvents(input, runOptions);
+      return;
+    }
+
+    const output = await runGeminiCli(input, {
+      ...runOptions,
+      outputFormat: "json"
     });
 
-    const events =
-      this.options.outputFormat === "stream-json"
-        ? parseGeminiStreamJsonOutput(output.stdout)
-        : parseGeminiJsonOutput(output.stdout);
+    const events = parseGeminiJsonOutput(output.stdout);
 
     for (const event of events) {
       yield event;
     }
+  }
+
+  runCliCommand(args: string[], context: { chatId?: string; userId?: string } = {}): Promise<string> {
+    return runGeminiCliCommand({
+      command: this.options.command,
+      args,
+      timeoutMs: Math.min(this.options.timeoutMs, MANAGEMENT_COMMAND_TIMEOUT_MS),
+      cwd: this.options.cwd,
+      logger: this.options.logger,
+      trustWorkspace: this.options.trustWorkspace,
+      chatId: context.chatId ?? "system",
+      userId: context.userId ?? "system"
+    });
   }
 }
 
@@ -72,6 +97,17 @@ interface RunGeminiCliOptions extends CliGeminiClientOptions {
 interface CommandOutput {
   stdout: string;
   stderr: string;
+}
+
+interface RunGeminiCliCommandOptions {
+  command: string;
+  args: string[];
+  timeoutMs: number;
+  cwd?: string;
+  logger?: OperatorLogger;
+  trustWorkspace?: boolean;
+  chatId: string;
+  userId: string;
 }
 
 export function buildGeminiCliArgs(prompt: string, options: GeminiCliArgsOptions): string[] {
@@ -89,7 +125,7 @@ export function buildGeminiCliArgs(prompt: string, options: GeminiCliArgsOptions
     args.push("--yolo");
   }
 
-  if (options.approvalMode) {
+  if (options.approvalMode && !options.yolo) {
     args.push("--approval-mode", options.approvalMode);
   }
 
@@ -129,9 +165,11 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
       return;
     }
 
-    const child = spawn(options.command, args, {
-      env: process.env,
+    const resolved = resolveSpawnCommand(options.command, args);
+    const child = spawn(resolved.command, resolved.args, {
+      env: buildChildEnv(options.trustWorkspace),
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
       ...(options.cwd ? { cwd: options.cwd } : {})
     });
 
@@ -165,9 +203,9 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
       cancelled = true;
       if (killTimer) clearTimeout(killTimer);
       logger.info("gemini_error", { chat: options.chatId, status: "cancel_requested" });
-      child.kill("SIGTERM");
+      terminateChildProcess(child, "SIGTERM");
       killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
+        terminateChildProcess(child, "SIGKILL");
         finish(() => {
           reject(new GeminiCliError("Gemini CLI run was cancelled", { stderr }));
         });
@@ -178,9 +216,9 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
       timedOut = true;
       if (killTimer) clearTimeout(killTimer);
       logger.error("gemini_error", { chat: options.chatId, status: "timeout", timeout_ms: options.timeoutMs });
-      child.kill("SIGTERM");
+      terminateChildProcess(child, "SIGTERM");
       killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
+        terminateChildProcess(child, "SIGKILL");
         finish(() => {
           reject(new GeminiCliError(`Gemini CLI timed out after ${options.timeoutMs}ms`, { stderr }));
         });
@@ -236,6 +274,271 @@ function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<Com
       });
     });
   });
+}
+
+function runGeminiCliCommand(options: RunGeminiCliCommandOptions): Promise<string> {
+  const logger = options.logger ?? noopOperatorLogger;
+
+  return new Promise((resolve, reject) => {
+    const resolved = resolveSpawnCommand(options.command, options.args);
+    const autoConfirm = shouldAutoConfirmManagementCommand(options.args);
+    const child = spawn(resolved.command, resolved.args, {
+      env: buildChildEnv(options.trustWorkspace),
+      stdio: [autoConfirm ? "pipe" : "ignore", "pipe", "pipe"],
+      windowsHide: true,
+      ...(options.cwd ? { cwd: options.cwd } : {})
+    });
+
+    if (!child.stdout || !child.stderr) {
+      reject(new GeminiCliError("Failed to start Gemini CLI command with piped stdout/stderr"));
+      return;
+    }
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const startedAt = Date.now();
+
+    logger.info("gemini_command_start", {
+      chat: options.chatId,
+      user: options.userId,
+      command: options.args.join(" ")
+    });
+
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+
+    const timer = setTimeout(() => {
+      logger.error("gemini_command_error", {
+        chat: options.chatId,
+        status: "timeout",
+        timeout_ms: options.timeoutMs,
+        command: options.args.join(" ")
+      });
+      terminateChildProcess(child, "SIGTERM");
+      finish(() => {
+        reject(new GeminiCliError(`Gemini CLI command timed out after ${options.timeoutMs}ms`, { stderr }));
+      });
+    }, options.timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    if (autoConfirm && child.stdin) {
+      child.stdin.write("y\n");
+      child.stdin.end();
+    }
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    child.on("error", (error) => {
+      finish(() => {
+        reject(new GeminiCliError(`Failed to start Gemini CLI command "${options.command}": ${error.message}`));
+      });
+    });
+
+    child.on("close", (code) => {
+      finish(() => {
+        if (code !== 0) {
+          reject(new GeminiCliError("Gemini CLI command exited with a non-zero status", { exitCode: code, stderr }));
+          return;
+        }
+
+        logger.info("gemini_command_done", {
+          chat: options.chatId,
+          status: "ok",
+          duration_ms: Date.now() - startedAt,
+          stdout_chars: stdout.length
+        });
+        resolve(formatCommandOutput(stdout, stderr));
+      });
+    });
+  });
+}
+
+async function* streamGeminiCliEvents(prompt: string, options: RunGeminiCliOptions): AsyncIterable<AssistantEvent> {
+  const args = buildGeminiCliArgs(prompt, options);
+  const logger = options.logger ?? noopOperatorLogger;
+
+  if (options.signal?.aborted) {
+    throw new GeminiCliError("Gemini CLI run was cancelled");
+  }
+
+  const resolved = resolveSpawnCommand(options.command, args);
+  const child = spawn(resolved.command, resolved.args, {
+    env: buildChildEnv(options.trustWorkspace),
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    ...(options.cwd ? { cwd: options.cwd } : {})
+  });
+
+  const queue: AssistantEvent[] = [];
+  const waiters: Array<() => void> = [];
+  let stdoutBuffer = "";
+  let stderr = "";
+  let settled = false;
+  let done = false;
+  let failure: unknown;
+  let timedOut = false;
+  let cancelled = false;
+  let killTimer: NodeJS.Timeout | undefined;
+  const startedAt = Date.now();
+
+  const notify = (): void => {
+    while (waiters.length > 0) {
+      waiters.shift()?.();
+    }
+  };
+
+  const waitForChange = (): Promise<void> =>
+    new Promise((resolve) => {
+      waiters.push(resolve);
+    });
+
+  const finish = (callback: () => void): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (killTimer) clearTimeout(killTimer);
+    options.signal?.removeEventListener("abort", abort);
+    callback();
+    notify();
+  };
+
+  const fail = (error: unknown): void => {
+    finish(() => {
+      failure = error;
+    });
+  };
+
+  const parseAvailableEvents = (): void => {
+    const segments = extractJsonSegments(stdoutBuffer);
+    if (segments.length === 0) {
+      return;
+    }
+
+    let consumed = 0;
+    for (const segment of segments) {
+      consumed = segment.end;
+      try {
+        const parsed = JSON.parse(segment.json);
+        if (!isStreamToolResultEvent(parsed)) {
+          throwIfStructuredError(parsed);
+        }
+        const event = normalizeStreamEvent(parsed);
+        if (event) {
+          queue.push(event);
+        }
+      } catch (error) {
+        fail(error);
+        return;
+      }
+    }
+    stdoutBuffer = stdoutBuffer.slice(consumed);
+    notify();
+  };
+
+  const abort = (): void => {
+    cancelled = true;
+    if (killTimer) clearTimeout(killTimer);
+    logger.info("gemini_error", { chat: options.chatId, status: "cancel_requested" });
+    terminateChildProcess(child, "SIGTERM");
+    killTimer = setTimeout(() => {
+      terminateChildProcess(child, "SIGKILL");
+      fail(new GeminiCliError("Gemini CLI run was cancelled", { stderr }));
+    }, 5_000);
+  };
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    if (killTimer) clearTimeout(killTimer);
+    logger.error("gemini_error", { chat: options.chatId, status: "timeout", timeout_ms: options.timeoutMs });
+    terminateChildProcess(child, "SIGTERM");
+    killTimer = setTimeout(() => {
+      terminateChildProcess(child, "SIGKILL");
+      fail(new GeminiCliError(`Gemini CLI timed out after ${options.timeoutMs}ms`, { stderr }));
+    }, 5_000);
+  }, options.timeoutMs);
+
+  options.signal?.addEventListener("abort", abort, { once: true });
+
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+
+  logger.info("gemini_start", {
+    chat: options.chatId,
+    user: options.userId,
+    output: options.outputFormat,
+    session: options.sessionId ? "present" : "new",
+    prompt_chars: prompt.length,
+    preview: logger.preview(prompt)
+  });
+
+  child.stdout.on("data", (chunk: string) => {
+    stdoutBuffer += chunk;
+    parseAvailableEvents();
+  });
+
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  child.on("error", (error) => {
+    fail(new GeminiCliError(`Failed to start Gemini CLI command "${options.command}": ${error.message}`));
+  });
+
+  child.on("close", (code) => {
+    parseAvailableEvents();
+    finish(() => {
+      if (timedOut) {
+        failure = new GeminiCliError(`Gemini CLI timed out after ${options.timeoutMs}ms`, { exitCode: code, stderr });
+        return;
+      }
+
+      if (cancelled) {
+        logger.info("gemini_done", { chat: options.chatId, status: "cancelled", duration_ms: Date.now() - startedAt });
+        failure = new GeminiCliError("Gemini CLI run was cancelled", { exitCode: code, stderr });
+        return;
+      }
+
+      if (code !== 0) {
+        logger.error("gemini_error", { chat: options.chatId, status: "non_zero_exit", exit_code: code });
+        failure = new GeminiCliError("Gemini CLI exited with a non-zero status", { exitCode: code, stderr });
+        return;
+      }
+
+      logger.info("gemini_done", {
+        chat: options.chatId,
+        status: "ok",
+        duration_ms: Date.now() - startedAt
+      });
+      done = true;
+    });
+  });
+
+  while (!done || queue.length > 0) {
+    while (queue.length > 0) {
+      const event = queue.shift();
+      if (event) {
+        yield event;
+      }
+    }
+
+    if (failure) {
+      throw failure;
+    }
+
+    if (!done) {
+      await waitForChange();
+    }
+  }
 }
 
 export function parseGeminiJsonOutput(stdout: string): AssistantEvent[] {
@@ -557,7 +860,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function extractJsonValues(value: string): string[] {
-  const jsonValues: string[] = [];
+  return extractJsonSegments(value).map((segment) => segment.json);
+}
+
+function extractJsonSegments(value: string): Array<{ json: string; end: number }> {
+  const jsonValues: Array<{ json: string; end: number }> = [];
   let start = -1;
   let depth = 0;
   let inString = false;
@@ -598,7 +905,7 @@ function extractJsonValues(value: string): string[] {
     if (char === "}" || char === "]") {
       depth -= 1;
       if (depth === 0) {
-        jsonValues.push(value.slice(start, index + 1));
+        jsonValues.push({ json: value.slice(start, index + 1), end: index + 1 });
         start = -1;
       }
     }
@@ -609,4 +916,57 @@ function extractJsonValues(value: string): string[] {
 
 function summarizeOutput(value: string): string {
   return JSON.stringify(value.trim().slice(0, 200));
+}
+
+function buildChildEnv(trustWorkspace: boolean | undefined): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(trustWorkspace === false ? {} : { GEMINI_CLI_TRUST_WORKSPACE: "true" })
+  };
+}
+
+function formatCommandOutput(stdout: string, stderr: string): string {
+  return [stdout, stderr]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function shouldAutoConfirmManagementCommand(args: readonly string[]): boolean {
+  if (args[0] !== "skills") {
+    return false;
+  }
+
+  return ["link", "install", "uninstall", "enable", "disable"].includes(args[1] ?? "");
+}
+
+function terminateChildProcess(child: { pid?: number; kill: (signal?: NodeJS.Signals) => boolean }, signal: NodeJS.Signals): void {
+  if (process.platform === "win32" && child.pid) {
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true
+    }).on("error", () => undefined);
+    return;
+  }
+
+  child.kill(signal);
+}
+
+function resolveSpawnCommand(command: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform !== "win32" || !/\.cmd$/i.test(command)) {
+    return { command, args };
+  }
+
+  if (basename(command).toLowerCase() === "gemini.cmd") {
+    const bundledGemini = join(dirname(command), "node_modules", "@google", "gemini-cli", "bundle", "gemini.js");
+    if (existsSync(bundledGemini)) {
+      return {
+        command: process.execPath,
+        args: [bundledGemini, ...args]
+      };
+    }
+  }
+
+  return { command, args };
 }

@@ -62,6 +62,58 @@ export class AssistantService {
     return this.requireTaskManager().getSubagentStatus(chatId);
   }
 
+  pauseWorkers(): WorkerStats {
+    return this.requireTaskManager().pause();
+  }
+
+  resumeWorkers(): WorkerStats {
+    return this.requireTaskManager().resume();
+  }
+
+  stopAllTasks(chatId?: string): AssistantTaskSummary[] {
+    return this.requireTaskManager().cancelAll(chatId);
+  }
+
+  listGeminiSessions(chatId: string, userId: string): Promise<string> {
+    return this.runGeminiCliCommand(["--list-sessions"], chatId, userId);
+  }
+
+  deleteGeminiSession(chatId: string, userId: string, session: string): Promise<string> {
+    return this.runGeminiCliCommand(["--delete-session", session], chatId, userId);
+  }
+
+  listGeminiMcpServers(chatId: string, userId: string): Promise<string> {
+    return this.runGeminiCliCommand(["mcp", "list"], chatId, userId);
+  }
+
+  listGeminiExtensions(chatId: string, userId: string): Promise<string> {
+    return this.runGeminiCliCommand(["extensions", "list"], chatId, userId);
+  }
+
+  listGeminiSkills(chatId: string, userId: string): Promise<string> {
+    return this.runGeminiCliCommand(["skills", "list"], chatId, userId);
+  }
+
+  linkGeminiSkill(chatId: string, userId: string, path: string): Promise<string> {
+    return this.runGeminiCliCommand(["skills", "link", path], chatId, userId);
+  }
+
+  installGeminiSkill(chatId: string, userId: string, source: string): Promise<string> {
+    return this.runGeminiCliCommand(["skills", "install", source], chatId, userId);
+  }
+
+  enableGeminiSkill(chatId: string, userId: string, name: string): Promise<string> {
+    return this.runGeminiCliCommand(["skills", "enable", name], chatId, userId);
+  }
+
+  disableGeminiSkill(chatId: string, userId: string, name: string): Promise<string> {
+    return this.runGeminiCliCommand(["skills", "disable", name], chatId, userId);
+  }
+
+  uninstallGeminiSkill(chatId: string, userId: string, name: string): Promise<string> {
+    return this.runGeminiCliCommand(["skills", "uninstall", name], chatId, userId);
+  }
+
   private async respondToTextUnlocked(request: AssistantRequest): Promise<string> {
     const session = await this.getOrCreateSession(request);
     const prompt = buildAssistantPrompt(request.text, this.options.systemInstruction);
@@ -151,5 +203,14 @@ export class AssistantService {
     }
 
     return this.taskManager;
+  }
+
+  private async runGeminiCliCommand(args: string[], chatId: string, userId: string): Promise<string> {
+    if (!this.geminiClient.runCliCommand) {
+      return "Gemini CLI management commands are not available for this backend.";
+    }
+
+    const output = await this.geminiClient.runCliCommand(args, { chatId, userId });
+    return output || "Command completed with no output.";
   }
 }

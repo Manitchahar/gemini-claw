@@ -5,7 +5,9 @@ import { AssistantTaskManager, TaskQueueFullError } from "../src/assistant/taskM
 import type { AssistantEvent } from "../src/assistant/types.js";
 import type { GeminiClient, GeminiClientContext } from "../src/gemini/GeminiClient.js";
 import type { SessionRecord, SessionStore } from "../src/storage/SessionStore.js";
+import type { TaskStore } from "../src/storage/TaskStore.js";
 import type { OperatorLogger } from "../src/utils/operatorLogger.js";
+import type { AssistantTaskSummary } from "../src/assistant/types.js";
 
 describe("AssistantTaskManager", () => {
   it("queues tasks beyond the configured worker limit", async () => {
@@ -121,6 +123,49 @@ describe("AssistantTaskManager", () => {
     await foreground;
     await vi.waitFor(() => expect(gemini.contexts).toHaveLength(1));
   });
+
+  it("pauses new workers and resumes queued work", async () => {
+    const gemini = new DeferredGeminiClient();
+    const manager = createManager(gemini);
+
+    manager.pause();
+    const task = manager.startTask({ chatId: "chat-1", userId: "user-1", text: "queued while paused" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(manager.getWorkerStats().paused).toBe(true);
+    expect(manager.getTask("chat-1", task.id)?.status).toBe("queued");
+    expect(gemini.contexts).toHaveLength(0);
+
+    manager.resume();
+    await vi.waitFor(() => expect(gemini.contexts).toHaveLength(1));
+    expect(manager.getWorkerStats().paused).toBe(false);
+  });
+
+  it("persists task updates and restores interrupted tasks as failed", async () => {
+    const taskStore = new MemoryTaskStore([
+      {
+        id: "t-0007",
+        chatId: "chat-1",
+        userId: "user-1",
+        text: "old running task",
+        status: "running",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        tools: [],
+        failedTools: [],
+        possibleSubagents: []
+      }
+    ]);
+    const manager = createManager(new ImmediateGeminiClient([{ type: "content_final", text: "done" }]), { taskStore });
+
+    expect(manager.getTask("chat-1", "t-0007")).toMatchObject({
+      status: "failed",
+      error: "Task was interrupted before this process started."
+    });
+
+    const task = manager.startTask({ chatId: "chat-1", userId: "user-1", text: "new task" });
+    await vi.waitFor(() => expect(manager.getTask("chat-1", task.id)?.status).toBe("succeeded"));
+    expect(taskStore.lastSaved.some((saved) => saved.id === task.id && saved.response === "done")).toBe(true);
+  });
 });
 
 function createManager(
@@ -182,6 +227,22 @@ class MemorySessionStore implements SessionStore {
 
   async deleteSession(chatId: string): Promise<void> {
     this.sessions.delete(chatId);
+  }
+}
+
+class MemoryTaskStore implements TaskStore {
+  lastSaved: AssistantTaskSummary[];
+
+  constructor(private readonly initial: AssistantTaskSummary[] = []) {
+    this.lastSaved = initial;
+  }
+
+  loadTasks(): AssistantTaskSummary[] {
+    return this.initial;
+  }
+
+  saveTasks(tasks: readonly AssistantTaskSummary[]): void {
+    this.lastSaved = [...tasks];
   }
 }
 
