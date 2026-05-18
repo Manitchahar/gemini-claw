@@ -128,6 +128,14 @@ describe("AssistantService", () => {
     expect(gemini.lastContext.extensions).toEqual(["google-workspace-cli"]);
 
     await service.respondToText({
+      chatId: "chat-mail",
+      userId: "user-1",
+      text: "what is the topic today in my DS mail"
+    });
+
+    expect(gemini.lastContext.extensions).toEqual(["google-workspace-cli"]);
+
+    await service.respondToText({
       chatId: "chat-2",
       userId: "user-1",
       text: "say ready"

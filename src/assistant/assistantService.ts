@@ -223,7 +223,7 @@ export class AssistantService {
 }
 
 function detectGoogleWorkspaceRequest(text: string): boolean {
-  return /\b(?:gmail|email|inbox|calendar|drive|docs?|sheets?|slides?|meet|workspace|gsuite|google\s+(?:mail|calendar|drive|docs?|sheets?|slides?))\b/i.test(
+  return /\b(?:gmail|email|mails?|inbox|calendar|drive|docs?|sheets?|slides?|meet|workspace|gsuite|google\s+(?:mail|calendar|drive|docs?|sheets?|slides?))\b/i.test(
     text
   );
 }

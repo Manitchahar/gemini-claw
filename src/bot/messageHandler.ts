@@ -20,11 +20,6 @@ export interface MessageHandlerOptions {
   responseChunkSize: number;
   typingActionIntervalMs?: number;
   toolProgressIntervalMs?: number;
-  gmailHealthCheck?: () => Promise<string>;
-  gmailRecentSearch?: (text: string) => Promise<string>;
-  gmailSentCount?: (text: string) => Promise<string>;
-  calendarAgenda?: (text: string) => Promise<string>;
-  driveRecentFiles?: (text: string) => Promise<string>;
   logger?: OperatorLogger;
 }
 
@@ -39,36 +34,6 @@ export function createTextMessageHandler(options: MessageHandlerOptions) {
 
     if (text.startsWith("/")) {
       await ctx.reply("Unknown command. Use /help for available commands.");
-      return;
-    }
-
-    if (isGmailRecentSearch(text)) {
-      const gmailRecentSearch = options.gmailRecentSearch ?? runGmailRecentSearch;
-      await ctx.reply(await gmailRecentSearch(text));
-      return;
-    }
-
-    if (isGmailSentCount(text)) {
-      const gmailSentCount = options.gmailSentCount ?? runGmailSentCount;
-      await ctx.reply(await gmailSentCount(text));
-      return;
-    }
-
-    if (isGmailHealthCheck(text)) {
-      const gmailHealthCheck = options.gmailHealthCheck ?? runGmailHealthCheck;
-      await ctx.reply(await gmailHealthCheck());
-      return;
-    }
-
-    if (isCalendarAgendaRequest(text)) {
-      const calendarAgenda = options.calendarAgenda ?? runCalendarAgenda;
-      await ctx.reply(await calendarAgenda(text));
-      return;
-    }
-
-    if (isDriveRecentFilesRequest(text)) {
-      const driveRecentFiles = options.driveRecentFiles ?? runDriveRecentFiles;
-      await ctx.reply(await driveRecentFiles(text));
       return;
     }
 
