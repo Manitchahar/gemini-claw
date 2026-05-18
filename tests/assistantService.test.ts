@@ -81,6 +81,60 @@ describe("AssistantService", () => {
     expect(onEvent).toHaveBeenNthCalledWith(1, { type: "tool_start", name: "ReadFile" });
     expect(onEvent).toHaveBeenNthCalledWith(2, { type: "tool_end", name: "ReadFile", success: true });
   });
+
+  it("can disable Gemini CLI session resume for fragile headless sessions", async () => {
+    const gemini = new ContextCaptureGeminiClient([{ type: "content_final", text: "Fresh" }, { type: "stats", sessionId: "new-session" }]);
+    const store = new MemorySessionStore();
+    await store.saveSession({
+      chatId: "chat-1",
+      userId: "user-1",
+      geminiSessionId: "stale-session",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    const service = new AssistantService(gemini, store, {
+      systemInstruction: "Be useful.",
+      resumeSessions: false
+    });
+
+    await expect(
+      service.respondToText({
+        chatId: "chat-1",
+        userId: "user-1",
+        text: "hello"
+      })
+    ).resolves.toBe("Fresh");
+
+    expect(gemini.lastContext.sessionId).toBeUndefined();
+    expect(await store.getSession("chat-1")).toMatchObject({
+      chatId: "chat-1",
+      userId: "user-1"
+    });
+    expect((await store.getSession("chat-1"))?.geminiSessionId).toBeUndefined();
+  });
+
+  it("loads the Google Workspace extension only for Workspace-style requests", async () => {
+    const gemini = new ContextCaptureGeminiClient([{ type: "content_final", text: "Done" }]);
+    const service = new AssistantService(gemini, new MemorySessionStore(), {
+      systemInstruction: "Be useful."
+    });
+
+    await service.respondToText({
+      chatId: "chat-1",
+      userId: "user-1",
+      text: "check my Gmail health"
+    });
+
+    expect(gemini.lastContext.extensions).toEqual(["google-workspace-cli"]);
+
+    await service.respondToText({
+      chatId: "chat-2",
+      userId: "user-1",
+      text: "say ready"
+    });
+
+    expect(gemini.lastContext.extensions).toBeUndefined();
+  });
 });
 
 class FakeGeminiClient implements GeminiClient {
@@ -90,6 +144,17 @@ class FakeGeminiClient implements GeminiClient {
 
   async *sendMessage(input: string, _context: GeminiClientContext): AsyncIterable<AssistantEvent> {
     this.lastInput = input;
+    yield* this.events;
+  }
+}
+
+class ContextCaptureGeminiClient implements GeminiClient {
+  lastContext: GeminiClientContext = { chatId: "", userId: "" };
+
+  constructor(private readonly events: AssistantEvent[]) {}
+
+  async *sendMessage(_input: string, context: GeminiClientContext): AsyncIterable<AssistantEvent> {
+    this.lastContext = context;
     yield* this.events;
   }
 }

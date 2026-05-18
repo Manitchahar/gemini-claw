@@ -23,6 +23,7 @@ const envSchema = z.object({
   GEMINI_EXTENSIONS: z.string().optional(),
   GEMINI_INCLUDE_DIRECTORIES: z.string().optional(),
   GEMINI_SETTINGS: z.string().trim().optional(),
+  GEMINI_RESUME_SESSIONS: z.string().optional(),
   GEMINI_MAX_WORKERS: z.coerce.number().int().positive().default(3),
   GEMINI_MAX_CHAT_WORKERS: z.coerce.number().int().positive().default(3),
   GEMINI_MAX_QUEUED_TASKS: z.coerce.number().int().positive().default(50),
@@ -62,6 +63,7 @@ export interface AppConfig {
   geminiExtensions: string[];
   geminiIncludeDirectories: string[];
   geminiSettings?: string;
+  geminiResumeSessions: boolean;
   geminiMaxWorkers: number;
   geminiMaxChatWorkers: number;
   geminiMaxQueuedTasks: number;
@@ -157,6 +159,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     geminiExtensions: parseCommaSeparatedList(data.GEMINI_EXTENSIONS),
     geminiIncludeDirectories: parseCommaSeparatedList(data.GEMINI_INCLUDE_DIRECTORIES),
     geminiSettings: data.GEMINI_SETTINGS || undefined,
+    geminiResumeSessions: parseBooleanConfig(data.GEMINI_RESUME_SESSIONS, "GEMINI_RESUME_SESSIONS", true),
     geminiMaxWorkers: data.GEMINI_MAX_WORKERS,
     geminiMaxChatWorkers: data.GEMINI_MAX_CHAT_WORKERS,
     geminiMaxQueuedTasks: data.GEMINI_MAX_QUEUED_TASKS,

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import type { AssistantEvent } from "../assistant/types.js";
@@ -8,6 +8,7 @@ import { GeminiCliError } from "../utils/errors.js";
 import type { GeminiClient, GeminiClientContext } from "./GeminiClient.js";
 
 const MANAGEMENT_COMMAND_TIMEOUT_MS = 30_000;
+const DEFAULT_NODE_COMPILE_CACHE_DIR = join(process.cwd(), ".data", "node-compile-cache");
 
 export interface CliGeminiClientOptions {
   command: string;
@@ -51,6 +52,8 @@ export class CliGeminiClient implements GeminiClient {
       ...this.options,
       model: context.model ?? this.options.model,
       sessionId: context.sessionId,
+      extensions: mergeUniqueStringLists(this.options.extensions, context.extensions),
+      includeDirectories: mergeUniqueStringLists(this.options.includeDirectories, context.includeDirectories),
       signal: context.signal,
       chatId: context.chatId,
       userId: context.userId
@@ -153,6 +156,11 @@ function appendCommaListArg(args: string[], flag: string, values: string[] | und
   if (values && values.length > 0) {
     args.push(flag, values.join(","));
   }
+}
+
+function mergeUniqueStringLists(base: string[] | undefined, extra: string[] | undefined): string[] | undefined {
+  const merged = [...(base ?? []), ...(extra ?? [])].filter(Boolean);
+  return merged.length > 0 ? [...new Set(merged)] : undefined;
 }
 
 function runGeminiCli(prompt: string, options: RunGeminiCliOptions): Promise<CommandOutput> {
@@ -382,7 +390,9 @@ async function* streamGeminiCliEvents(prompt: string, options: RunGeminiCliOptio
   const queue: AssistantEvent[] = [];
   const waiters: Array<() => void> = [];
   let stdoutBuffer = "";
+  let rawStdout = "";
   let stderr = "";
+  let sawEvent = false;
   let settled = false;
   let done = false;
   let failure: unknown;
@@ -434,6 +444,7 @@ async function* streamGeminiCliEvents(prompt: string, options: RunGeminiCliOptio
         }
         const event = normalizeStreamEvent(parsed);
         if (event) {
+          sawEvent = true;
           queue.push(event);
         }
       } catch (error) {
@@ -482,6 +493,7 @@ async function* streamGeminiCliEvents(prompt: string, options: RunGeminiCliOptio
   });
 
   child.stdout.on("data", (chunk: string) => {
+    rawStdout += chunk;
     stdoutBuffer += chunk;
     parseAvailableEvents();
   });
@@ -512,6 +524,13 @@ async function* streamGeminiCliEvents(prompt: string, options: RunGeminiCliOptio
         logger.error("gemini_error", { chat: options.chatId, status: "non_zero_exit", exit_code: code });
         failure = new GeminiCliError("Gemini CLI exited with a non-zero status", { exitCode: code, stderr });
         return;
+      }
+
+      if (!sawEvent) {
+        const fallbackText = rawStdout.trim();
+        if (fallbackText) {
+          queue.push({ type: "content_final", text: fallbackText });
+        }
       }
 
       logger.info("gemini_done", {
@@ -919,10 +938,21 @@ function summarizeOutput(value: string): string {
 }
 
 function buildChildEnv(trustWorkspace: boolean | undefined): NodeJS.ProcessEnv {
+  const nodeCompileCache = process.env.NODE_COMPILE_CACHE || DEFAULT_NODE_COMPILE_CACHE_DIR;
+  ensureDirectory(nodeCompileCache);
+
   return {
     ...process.env,
+    NODE_COMPILE_CACHE: nodeCompileCache,
+    GEMINI_PTY_INFO: "child_process",
     ...(trustWorkspace === false ? {} : { GEMINI_CLI_TRUST_WORKSPACE: "true" })
   };
+}
+
+function ensureDirectory(path: string): void {
+  if (!existsSync(path)) {
+    mkdirSync(path, { recursive: true });
+  }
 }
 
 function formatCommandOutput(stdout: string, stderr: string): string {

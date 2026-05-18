@@ -429,6 +429,21 @@ describe("CliGeminiClient", () => {
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 
+  it("falls back to plain stdout when Gemini CLI ignores stream-json", async () => {
+    const child = mockStreamingGeminiCli();
+    const client = new CliGeminiClient({
+      command: "gemini",
+      outputFormat: "stream-json",
+      timeoutMs: 1_000
+    });
+    const events = collectEvents(client);
+
+    child.stdout.emit("data", "plain answer");
+    child.emit("close", 0);
+
+    await expect(events).resolves.toEqual([{ type: "content_final", text: "plain answer" }]);
+  });
+
   it("runs Gemini CLI management commands", async () => {
     const child = mockStreamingGeminiCli();
     const client = new CliGeminiClient({

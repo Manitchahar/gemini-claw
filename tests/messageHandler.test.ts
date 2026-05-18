@@ -140,6 +140,209 @@ describe("createTextMessageHandler", () => {
     expect(editMessageText).toHaveBeenCalledWith(123, 99, "Done: ReadFile finished.");
     expect(reply).toHaveBeenNthCalledWith(2, "Done");
   });
+
+  it("uses the fast Gmail health check only for explicit Gmail health requests", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Assistant response")
+    };
+    const gmailHealthCheck = vi.fn().mockResolvedValue("GMAIL_OK: Gmail profile read succeeded.");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      gmailHealthCheck
+    });
+
+    await handler(
+      createContext({
+        text: "Gmail health check only",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(gmailHealthCheck).toHaveBeenCalledTimes(1);
+    expect(assistant.respondToText).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("GMAIL_OK: Gmail profile read succeeded.");
+  });
+
+  it("does not intercept real Gmail search requests as health checks", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Found mail")
+    };
+    const gmailHealthCheck = vi.fn().mockResolvedValue("GMAIL_OK");
+    const gmailRecentSearch = vi.fn().mockResolvedValue("Recent Gmail messages:");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      gmailHealthCheck,
+      gmailRecentSearch
+    });
+
+    await handler(
+      createContext({
+        text: "check my Gmail inbox for recent mails",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(gmailHealthCheck).not.toHaveBeenCalled();
+    expect(gmailRecentSearch).toHaveBeenCalledWith("check my Gmail inbox for recent mails");
+    expect(assistant.respondToText).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("Recent Gmail messages:");
+  });
+
+  it("does not intercept mutating Gmail requests as recent searches", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Drafted")
+    };
+    const gmailRecentSearch = vi.fn().mockResolvedValue("Recent Gmail messages:");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      gmailRecentSearch
+    });
+
+    await handler(
+      createContext({
+        text: "reply to my latest Gmail",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(gmailRecentSearch).not.toHaveBeenCalled();
+    expect(assistant.respondToText).toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("Drafted");
+  });
+
+  it("answers sent-mail count requests through the Gmail count fast path", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Assistant response")
+    };
+    const gmailSentCount = vi.fn().mockResolvedValue("GMAIL_SENT_COUNT: 8 sent messages yesterday.");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      gmailSentCount
+    });
+
+    await handler(
+      createContext({
+        text: "how many mails i set yesterdya",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(gmailSentCount).toHaveBeenCalledWith("how many mails i set yesterdya");
+    expect(assistant.respondToText).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("GMAIL_SENT_COUNT: 8 sent messages yesterday.");
+  });
+
+  it("answers read-only calendar agenda requests through the calendar fast path", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Assistant response")
+    };
+    const calendarAgenda = vi.fn().mockResolvedValue("Calendar agenda today: 1 event.");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      calendarAgenda
+    });
+
+    await handler(
+      createContext({
+        text: "show my calendar today privacy-safe",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(calendarAgenda).toHaveBeenCalledWith("show my calendar today privacy-safe");
+    expect(assistant.respondToText).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("Calendar agenda today: 1 event.");
+  });
+
+  it("does not intercept mutating calendar requests", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Scheduled")
+    };
+    const calendarAgenda = vi.fn().mockResolvedValue("Calendar agenda today: 1 event.");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      calendarAgenda
+    });
+
+    await handler(
+      createContext({
+        text: "schedule a meeting on my calendar today",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(calendarAgenda).not.toHaveBeenCalled();
+    expect(assistant.respondToText).toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("Scheduled");
+  });
+
+  it("answers read-only Drive recent file requests through the Drive fast path", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Assistant response")
+    };
+    const driveRecentFiles = vi.fn().mockResolvedValue("Recent Drive files: 3 shown.");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      driveRecentFiles
+    });
+
+    await handler(
+      createContext({
+        text: "show recent drive files privacy-safe",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(driveRecentFiles).toHaveBeenCalledWith("show recent drive files privacy-safe");
+    expect(assistant.respondToText).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("Recent Drive files: 3 shown.");
+  });
+
+  it("does not intercept mutating Drive requests", async () => {
+    const assistant: Pick<AssistantService, "respondToText"> = {
+      respondToText: vi.fn().mockResolvedValue("Shared")
+    };
+    const driveRecentFiles = vi.fn().mockResolvedValue("Recent Drive files: 3 shown.");
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const handler = createTextMessageHandler({
+      assistant,
+      responseChunkSize: 3900,
+      driveRecentFiles
+    });
+
+    await handler(
+      createContext({
+        text: "share my latest drive file",
+        sendChatAction: vi.fn().mockResolvedValue(undefined),
+        reply
+      })
+    );
+
+    expect(driveRecentFiles).not.toHaveBeenCalled();
+    expect(assistant.respondToText).toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith("Shared");
+  });
 });
 
 describe("createUnsupportedMessageHandler", () => {

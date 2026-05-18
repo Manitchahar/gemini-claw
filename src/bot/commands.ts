@@ -6,6 +6,7 @@ import type { AssistantTaskSummary, SubagentStatus, WorkerStats } from "../assis
 import { GeminiCliError } from "../utils/errors.js";
 import { noopOperatorLogger, type OperatorLogger } from "../utils/operatorLogger.js";
 import { chunkTelegramMessage } from "./messageUtils.js";
+import { runCalendarAgenda, runDriveRecentFiles, runGmailRecentSearch, runGmailSentCount } from "./messageHandler.js";
 import { createToolProgressReporter } from "./toolProgress.js";
 
 export interface OperatorCommandOptions {
@@ -74,6 +75,11 @@ export function registerCommands(bot: Bot, assistant: AssistantService, options:
   bot.command("plan", async (ctx) => {
     logCommand(logger, "plan", ctx.chat?.id, ctx.from?.id);
     await ctx.reply(formatPlanMessage(options));
+  });
+
+  bot.command("demo_check", async (ctx) => {
+    logCommand(logger, "demo_check", ctx.chat?.id, ctx.from?.id);
+    await ctx.reply(await runDemoCheck());
   });
 
   bot.command("task", async (ctx) => {
@@ -346,6 +352,7 @@ export function formatHelpMessage(): string {
     "/status - show safe runtime status.",
     "/tools - show configured tool and extension visibility.",
     "/plan - show the current operating mode summary.",
+    "/demo_check - run read-only Gmail, Calendar, and Drive demo checks.",
     "/task <prompt> - start a background Gemini CLI worker.",
     "/tasks - list running and recent tasks.",
     "/task_status <id> - show one task's status.",
@@ -367,6 +374,29 @@ export function formatHelpMessage(): string {
     "/subagents - show configured and observed subagent state.",
     "For safety, this bot only responds to allowlisted Telegram users."
   ].join("\n");
+}
+
+async function runDemoCheck(): Promise<string> {
+  const checks: Array<{ name: string; run: () => Promise<string> }> = [
+    { name: "Gmail recent", run: () => runGmailRecentSearch("Find 3 recent Gmail messages privacy-safe") },
+    { name: "Gmail sent count", run: () => runGmailSentCount("how many mails i set yesterdya") },
+    { name: "Calendar today", run: () => runCalendarAgenda("show my calendar today privacy-safe") },
+    { name: "Drive recent", run: () => runDriveRecentFiles("show recent drive files privacy-safe") }
+  ];
+  const results = [];
+
+  for (const check of checks) {
+    const startedAt = Date.now();
+    try {
+      const output = await check.run();
+      const ok = !/\b(?:FAIL|failed|error)\b/i.test(output);
+      results.push(`${check.name}: ${ok ? "OK" : "FAIL"} (${Date.now() - startedAt}ms)`);
+    } catch (error) {
+      results.push(`${check.name}: FAIL (${Date.now() - startedAt}ms) ${preview(error instanceof Error ? error.message : String(error), 120)}`);
+    }
+  }
+
+  return ["Demo check:", ...results, "Model: auto/default. Fast GSuite checks bypass Gemini for demo reliability."].join("\n");
 }
 
 export function formatStatusMessage(options: OperatorCommandOptions): string {

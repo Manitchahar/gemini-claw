@@ -120,6 +120,7 @@ export class AssistantService {
     const contentChunks: string[] = [];
     let finalContent = "";
     let nextSessionId = session.geminiSessionId;
+    const resumeSessions = this.options.resumeSessions ?? true;
     const startedAt = Date.now();
 
     this.logger.info("chat_request", {
@@ -132,7 +133,8 @@ export class AssistantService {
     for await (const event of this.geminiClient.sendMessage(prompt, {
       chatId: request.chatId,
       userId: request.userId,
-      sessionId: session.geminiSessionId
+      sessionId: resumeSessions ? session.geminiSessionId : undefined,
+      extensions: detectGoogleWorkspaceRequest(request.text) ? ["google-workspace-cli"] : undefined
     })) {
       if (event.type === "tool_start" || event.type === "tool_end") {
         this.logger.info(event.type === "tool_start" ? "tool_start" : "tool_end", {
@@ -159,7 +161,12 @@ export class AssistantService {
       }
     }
 
-    if (nextSessionId !== session.geminiSessionId) {
+    if (!resumeSessions) {
+      await this.sessionStore.saveSession({
+        ...session,
+        geminiSessionId: undefined
+      });
+    } else if (nextSessionId !== session.geminiSessionId) {
       await this.sessionStore.saveSession({
         ...session,
         geminiSessionId: nextSessionId
@@ -213,4 +220,10 @@ export class AssistantService {
     const output = await this.geminiClient.runCliCommand(args, { chatId, userId });
     return output || "Command completed with no output.";
   }
+}
+
+function detectGoogleWorkspaceRequest(text: string): boolean {
+  return /\b(?:gmail|email|inbox|calendar|drive|docs?|sheets?|slides?|meet|workspace|gsuite|google\s+(?:mail|calendar|drive|docs?|sheets?|slides?))\b/i.test(
+    text
+  );
 }

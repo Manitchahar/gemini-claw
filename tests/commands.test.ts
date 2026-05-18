@@ -53,6 +53,7 @@ describe("registerCommands", () => {
       "status",
       "tools",
       "plan",
+      "demo_check",
       "task",
       "tasks",
       "task_status",
@@ -84,6 +85,7 @@ describe("registerCommands", () => {
     expect(reply).toContain("/status");
     expect(reply).toContain("/tools");
     expect(reply).toContain("/plan");
+    expect(reply).toContain("/demo_check");
     expect(reply).toContain("/task <prompt>");
     expect(reply).toContain("/stop_all");
     expect(reply).toContain("/sessions");

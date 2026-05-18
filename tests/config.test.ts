@@ -33,6 +33,7 @@ describe("config", () => {
     expect(config.geminiExtensions).toEqual([]);
     expect(config.geminiIncludeDirectories).toEqual([]);
     expect(config.geminiSettings).toBeUndefined();
+    expect(config.geminiResumeSessions).toBe(true);
     expect(config.geminiMaxWorkers).toBe(3);
     expect(config.geminiMaxChatWorkers).toBe(3);
     expect(config.geminiMaxQueuedTasks).toBe(50);
@@ -91,6 +92,7 @@ describe("config", () => {
       GEMINI_EXTENSIONS: "ext-a, ext-b",
       GEMINI_INCLUDE_DIRECTORIES: "src, tests",
       GEMINI_SETTINGS: " settings.json ",
+      GEMINI_RESUME_SESSIONS: "false",
       GEMINI_MAX_WORKERS: "5",
       GEMINI_MAX_CHAT_WORKERS: "2",
       GEMINI_MAX_QUEUED_TASKS: "25",
@@ -114,6 +116,7 @@ describe("config", () => {
     expect(config.geminiExtensions).toEqual(["ext-a", "ext-b"]);
     expect(config.geminiIncludeDirectories).toEqual(["src", "tests"]);
     expect(config.geminiSettings).toBe("settings.json");
+    expect(config.geminiResumeSessions).toBe(false);
     expect(config.geminiMaxWorkers).toBe(5);
     expect(config.geminiMaxChatWorkers).toBe(2);
     expect(config.geminiMaxQueuedTasks).toBe(25);

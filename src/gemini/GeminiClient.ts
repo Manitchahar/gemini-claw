@@ -6,6 +6,8 @@ export interface GeminiClientContext {
   sessionId?: string;
   model?: string;
   signal?: AbortSignal;
+  extensions?: string[];
+  includeDirectories?: string[];
 }
 
 export interface GeminiClient {

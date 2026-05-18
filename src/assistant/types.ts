@@ -41,6 +41,7 @@ export type AssistantEvent =
 
 export interface AssistantOptions {
   systemInstruction: string;
+  resumeSessions?: boolean;
 }
 
 export type AssistantTaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";

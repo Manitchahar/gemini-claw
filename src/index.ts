@@ -8,10 +8,14 @@ import { loadConfig } from "./config.js";
 import { CliGeminiClient } from "./gemini/CliGeminiClient.js";
 import { JsonSessionStore } from "./storage/JsonSessionStore.js";
 import { JsonTaskStore } from "./storage/JsonTaskStore.js";
+import { existsSync, mkdirSync } from "node:fs";
 import { createOperatorLogger } from "./utils/operatorLogger.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  if (config.geminiCwd && !existsSync(config.geminiCwd)) {
+    mkdirSync(config.geminiCwd, { recursive: true });
+  }
   const logger = createOperatorLogger({
     level: config.operatorLogLevel,
     style: config.operatorLogStyle,
@@ -56,7 +60,8 @@ async function main(): Promise<void> {
     geminiClient,
     sessionStore,
     {
-      systemInstruction: config.assistantSystemInstruction
+      systemInstruction: config.assistantSystemInstruction,
+      resumeSessions: config.geminiResumeSessions
     },
     taskManager,
     chatQueue,
